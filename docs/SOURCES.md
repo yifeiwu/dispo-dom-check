@@ -1,0 +1,327 @@
+# Data sources
+
+Every source is free, requires no API key and no registration. Each was verified live during design;
+the observed behaviour is recorded so a future failure can be told apart from a mistaken assumption.
+
+Service endpoints appear below because they are operational facts about the system. No analysed domain
+appears anywhere in this repository.
+
+## In use
+
+### RDAP — registration and age (the anchor)
+
+- Bootstrap: `https://data.iana.org/rdap/dns.json`, roughly 1200 suffixes, cached in-process.
+- The registry endpoint is then taken from the bootstrap and queried directly.
+- Yields creation, expiry and `lastChanged` events, registrar and IANA ID, EPP status codes,
+  nameservers and sometimes an unredacted registrant organisation.
+- Use the bootstrap directly rather than a redirector service, which timed out at 15 s twice during
+  testing.
+- **238 of the root zone's 1438 suffixes publish no RDAP service at all**, including `.de`, `.it`,
+  `.ch`, `.se`, `.eu`, `.jp`, `.at`, `.be`, `.ru` and `.kr`. Those degrade to `unsupported`.
+- A registry that publishes RDAP can still fail to answer. Where it does, the port-43 collector below
+  runs instead; see *When the registry publishes RDAP and does not answer*.
+
+### WHOIS on port 43 — the registration record where RDAP does not answer
+
+- Server per suffix from `lib/data/whois-servers.json`, a committed snapshot of IANA's own root database
+  built by `npm run refresh:whois`. 872 of the root zone's 1438 suffixes publish a port-43 server and
+  appear there; the other 565 publish none and stay `unsupported` where RDAP cannot answer either.
+- **Runs when RDAP produced no answer**: either `unsupported`, meaning the protocol is absent, or
+  `timeout` and `rate_limited`, meaning the server exists and did not respond. Not on `unavailable`,
+  which is a registry that answered and said no — an answer, and one port 43 agrees with.
+- RDAP remains preferred wherever it responds. This is a fallback, not a second opinion: no domain is
+  scored from the text format while the structured one was available.
+- Discovery is committed rather than performed per request. IANA's mapping is authoritative but reaching
+  it costs a second port-43 round trip before the real query, to learn something that changes on the
+  order of years.
+- **No referral hop** to the registrar's own WHOIS server. Referrals are a gTLD pattern, and the thin
+  registries that use them answer the creation date directly.
+- Given a 3 s deadline rather than the standard 4 s. The protocol has no framing at all — a response ends
+  when the socket does — so a stalled registry is indistinguishable from a slow one until the deadline
+  fires. It shares its wave with the site probe, whose deadline is longer, so the attempt costs no
+  wall-clock time on an analysis that makes it.
+
+#### When the registry publishes RDAP and does not answer
+
+The collector originally ran only on `unsupported`, on the reasoning that a failed request is not a
+missing protocol and retrying it over the slowest transport in the system would re-ask a settled
+question. Measuring the model against the labelled holdout showed both halves of that to be wrong.
+
+**14% of domains got no registration record because RDAP stalled**, and they were not spread thinly: they
+concentrated almost entirely on one registry, which serves roughly 20 requests and then blocks the client
+address by dropping connections rather than returning a status. Every domain under it therefore stalls
+identically until the deadline fires, and because no 429 is ever sent, `rate_limited` never appears and
+the failure is indistinguishable from slowness. Queried on port 43, those same domains answer immediately
+with a creation date.
+
+That 14% is the slice attributable to a registry refusing this way, not the overall timeout rate.
+`docs/CALIBRATION.md` reports 23% of domains timing out on RDAP, which is the wider figure: it counts
+every registry that was merely slow as well as the ones deliberately dropping the connection.
+
+So the question was not settled — it had no answer at all — and since age is the heaviest-weighted signal
+in the model, this was the most expensive gap available to close.
+
+**No published measurement covers the widened trigger yet.** Every figure in `docs/CALIBRATION.md` comes
+from a collection made while this collector still ran on `unsupported` alone, so the 71% recovery rate it
+quotes for port 43 is measured on the no-RDAP slice only, and the 23% it reports as RDAP timeouts is the
+gap this change addresses rather than what is left after it. Pricing the change means collecting the
+holdout again.
+
+This is also why the server map covers suffixes that publish RDAP. Restricting it to the gap made the
+fallback impossible by construction: the one transport that could still answer had no address to dial.
+
+#### What it does and does not restore
+
+Verified live against the registries named. `.it`, `.se`, `.jp` and `.io` return real creation dates and
+the whole age dimension comes back with them. **`.de`, `.at` and `.eu` answer in full and publish no
+registration date at all**, so those suffixes gain contact and status data but no age, which is reported
+against the source rather than left as a blank the reader has to explain. `.ch` refuses automated queries
+outright.
+
+Two format traps are worth recording, because both produce a confidently wrong answer rather than a
+missing one, and both are covered by tests:
+
+- `.it` repeats `Created:` inside every contact block. A parser taking the last value reports the date a
+  contact record was touched — for a domain registered in 1999 and updated this year, a 26-year error in
+  the heaviest-weighted signal in the model. First occurrence wins.
+- `.be` reports a **registered** domain as `Status: NOT AVAILABLE`. A substring test for "available"
+  inverts the answer for an entire ccTLD, so availability is matched against whole field values only.
+
+Dates are normalised from a fixed set of observed formats and anything else yields nothing. `Date.parse`
+was rejected for this: it accepts `01-02-2020` happily and resolves the ambiguity by guessing, and a wrong
+date is worse than no date, because the age dimension carries it at full weight with nothing downstream
+able to tell an inferred date from a published one.
+
+Registry data quirks pass through as the registry states them. JPRS reports `asahi.co.jp` as registered in
+2018, which is its record of the current registration rather than the original one. That is the same class
+of gap as the drop-catch case below, not a parsing error.
+
+Rate limiting on port 43 is tighter than on RDAP and enforced per source address, which on a serverless
+platform is an address shared with every other tenant. Refusals arrive as ordinary body text with no
+status code, so they are matched explicitly and reported as `rate_limited`; without that a throttled
+lookup would parse as a registry that publishes nothing.
+
+### DNS over HTTPS
+
+- `https://dns.google/resolve?name=X&type=Y`
+- `https://cloudflare-dns.com/dns-query?name=X&type=Y`, which requires `accept: application/dns-json`
+  and returns 400 without it.
+- Records used: A/AAAA, where the `AD` flag gives DNSSEC validation for free; NS; MX; apex TXT;
+  `_dmarc` TXT; DKIM selector probes; and `www` for record breadth.
+- `<domain>._report._dmarc.<vendor>` TXT, added in `1.3.0`, which is the authorisation RFC 7489 §7.1
+  requires before a domain may send DMARC reports to a destination outside its own namespace. This is
+  the one request in the model whose answer comes from a party other than the domain being analysed,
+  and it is what makes `mail.commercial_rua` the only mail credit still scored. It runs only where a
+  commercial vendor was matched in `rua`, so almost every analysis pays nothing for it, and it has to
+  follow the `_dmarc` lookup rather than run beside it, since the destination is unknown until that
+  record is parsed.
+- DKIM probes follow at most one CNAME hop. This covers the delegated selectors used by hosted mail
+  systems without allowing a malformed chain to consume the source deadline. Six selectors are tried,
+  a list bounded by marginal coverage rather than by how many selectors exist: measured over 4,691
+  holdout domains they reach 98.8% of all detections, and each additional entry costs a query on every
+  analysis.
+- `www` is resolved with a single address query and no separate CNAME lookup. A resolver returns the
+  CNAME chain alongside whatever it resolved to, so a `www` that is only a CNAME is already visible in
+  that answer; across 4,659 stored transcripts the separate query changed the result for one domain.
+- Two probe sets were retired in `1.3.0` along with the credits they fed, taking the DNS fan-out from 21.7
+  queries per analysis to 14.6 — a third of the DNS work, measured across 4,746 stored transcripts and
+  confirmed by counting what the collectors ask for under replay. `default._bimi` TXT is no longer
+  requested, and neither are the six standard business-service names — `autodiscover`,
+  `enterpriseenrollment`, `enterpriseregistration`, `_sip._tls`, `_sipfederationtls._tcp` and
+  `_caldav._tcp`. Publishing any of them requires no account with the vendor named, so nothing they
+  established could move a verdict, and a fact the model is indifferent to does not justify a round trip
+  on every analysis. See `docs/SCORING.md`.
+
+### Suffix pricing — committed snapshot, no network
+
+- `https://api.porkbun.com/api/json/v3/pricing/get`, no authentication, roughly 900 suffixes with
+  registration and renewal prices.
+- **Downloaded once by `npm run refresh:pricing` into `lib/data/suffix-pricing.json`, not fetched at
+  request time.** The feed answered in 12 to 14 s, which is longer than the whole analysis budget: fetched
+  per request the dimension timed out every time, and cached in memory it was still dead for the first
+  request of every process. Suffix prices move on the order of months, so snapshot staleness is much the
+  cheaper cost. Re-run the script and commit the diff when a registry changes its pricing.
+- Observed first-year prices spanned about $1.50 for the cheapest new gTLDs to roughly $28 for the
+  expensive technical ones, with the mainstream commercial suffixes between $8 and $13. At the bottom
+  of that range an abuser buys seven names for the price of one mainstream registration.
+- The renewal-to-registration ratio is the sharper derived signal: the cheapest suffixes renew at ten
+  to fifteen times their first-year price, while the mainstream ones renew at parity. A registry
+  discounting year one that heavily is selling disposability.
+- **Parsing note:** premium prices arrive with thousands separators, so strip commas before parsing.
+  A zero is the feed's way of listing a suffix it does not sell rather than a free registration — the
+  one in the current snapshot is a closed brand TLD — so a non-positive figure is read as absence. There
+  is no free TLD for it to be confused with: the namespaces that were given away are now either back
+  with their governments or charging for registration, and the names still issued at no cost are
+  subdomains under a provider, which the provider-suffix table scores directly.
+- **Coverage is the mainstream retail market, not every suffix.** The feed is one registrar's catalogue,
+  so it carries roughly 900 suffixes and only the 94 second-level ones that a Western registrar sells. The
+  second-level national namespaces are largely absent, as are the ex-free ccTLDs. A suffix it does not
+  sell is matched exactly and reported as unpriced; no price is inferred from the parent suffix, because
+  a registry's second-level namespaces routinely cost a tenth of its base ccTLD and the inherited figure
+  therefore hides the cheapest suffixes in existence.
+
+#### Amending the snapshot from other price sources — rejected
+
+Measured while looking for a price for a second-level namespace the feed omits.
+
+| Source | Observed |
+| --- | --- |
+| Registry fee schedules published by the ccTLD operator | Authoritative and free, and the closest thing to an abuser's real cost basis, since several registries publish both a wholesale fee and a minimum retail price. But they are per-registry PDFs in local currency, quoting figures that need an exchange rate to compare, and each one covers a single country. Roughly 200 registries would have to be tracked individually to close the gap. |
+| Registrars local to the registry | The genuine market price, including the promotional pricing an abuser actually buys at. Same problem: per-country, per-currency, HTML only, and promotional figures move week to week. |
+| Western registrars that resell exotic ccTLDs | Available and machine-readable, and **actively misleading**. One boutique European registrar lists three second-level namespaces at $30 a year that retail locally for two or three dollars, because it charges a flat handling premium on anything exotic. Adding it would have moved the number further from the truth than having none. |
+| Price-comparison aggregators | The only sources with both broad second-level coverage and a cheapest-registrar view, which is the right aggregation. All of the ones checked require an account and an API keypair, which no other source in this project does. |
+
+Absence is therefore left as absence, reported to the reader and scored zero, which generalises across
+countries in a way that a backfill could not. See `docs/SCORING.md`.
+
+### Live site probe
+
+- One HTTPS root fetch, falling back to http with whatever the first leg left of a shared budget, with
+  redirect tracking capped at 5 and the body read capped at 256 KB. That is the whole of it: the
+  `robots.txt` request was retired in `1.2.0` along with the signal that read it, which is one fewer round
+  trip inside the site budget.
+- Answers only one question: does this domain do anything other than receive mail.
+- **Every hop faces the same host rules the submitted input did.** The chain is followed in `lib/fetch.ts`
+  rather than by the runtime, which caps at twenty hops and revalidates nothing between them. A redirect
+  target is a host chosen by the domain under analysis, so without the boundary's own test — no address
+  literals, no reserved names, no other schemes — the gate covers exactly one request, and a domain
+  answering `302 http://169.254.169.254/` has its target fetched, read, and reported back with the status,
+  size and title attached. A refused chain returns the redirect itself: reachable, not substantive, with
+  nothing about the destination read or shown. A public name resolving to a private address still passes,
+  which needs address pinning rather than a string test and is not attempted.
+- The final redirect host is classified from a bundled table. Known parking destinations become parking
+  evidence; nothing else about the destination is scored, since the off-domain redirect penalty was
+  measured and removed. A redirect still costs the domain the content credit, because a root that
+  forwards elsewhere never serves the page itself.
+- **Soft 404s are detected by status code, not body size**, since a large custom error page is
+  otherwise indistinguishable from a real page.
+
+### Bundled tables (no network)
+
+MX fingerprints carry the primary dimension, so they are code versioned with the model rather than a
+feed fetched per request. Verified classes:
+
+| Class | Fingerprint approach |
+| --- | --- |
+| Free custom-domain routing | Matched on mail-exchanger hostname suffix, because the routing names are per-account and versioned under a stable parent. The dominant provider in this class is corroborated two further ways: every routing target resolves inside one small IPv4 prefix, and the provider publishes a well-known SPF include. |
+| Registrar free forwarding | Bundled free with any domain at the registrar and catch-all capable. Its paid mailbox product resolves elsewhere and is the opposite signal. |
+| Free tiers of hosted mail | Several providers accept any custom domain on a free plan. Where a provider's free and paid tiers share mail exchangers they cannot be separated from DNS, which is noted in the table. |
+| Temp-mail | Throwaway-inbox operators self-brand their mail exchangers, and keep the same ones as they rotate front-end domains. |
+| Alias forwarders | Unmistakable per-provider mail exchangers. |
+| Shared relay domains | Matched on the submitted domain, since relay users receive mail at the provider's domain and never point their own MX. |
+| Paid mail tenancy | Business suites and enterprise mail gateways, used as a weak positive. |
+| Consumer mail infrastructure | Matched on mail exchanger so that a large free provider's vanity domains route to `out_of_scope` generically, instead of requiring every one to be enumerated. |
+| Registrar defaults | Requires the RDAP registrar identity, its default nameservers and its bundled forwarding MX to agree. No component is negative alone. |
+| Redirect targets | Known parking, hosted-site and public-profile destinations are classified locally; an unrecognised external destination remains unknown rather than guessed. |
+
+Two tables that sat here are gone, each with the only credit that read it. A custom-domain website-platform
+table, matched on apex or `www` CNAME target and split so that a free platform did not imply spend, went in
+`1.2.0` with `configuration.hosted_service` and the apex CNAME lookup that fed it. A business-services
+table, classifying autodiscovery, enrollment, SIP and calendaring targets into vendors, went in `1.3.0` for
+the reason above: pointing a CNAME or SRV record at a vendor requires no account with that vendor.
+
+Because SMTP port 25 is unavailable from the deployment target, catch-all capability cannot be probed
+directly, and this MX-class inference is the substitute.
+
+Public suffix parsing uses `tldts`, including the PSL private section, so platform-owned suffixes are
+recognised. Registration age there belongs to the provider and is meaningless for the name beneath it.
+The PSL is incomplete for free-subdomain and dynamic-DNS providers, so a supplementary table covers
+them.
+
+## Rejected, with the observed reason
+
+| Source | Reason |
+| --- | --- |
+| RDAP redirector service | Timed out at 15 s twice, and 404s for suffixes that genuinely have no RDAP. |
+| crt.sh JSON endpoint | Returned `502 Bad Gateway`. |
+| A well-known URL blocklist API | Now returns `401 Unauthorized` without an auth key. |
+| Spamhaus DBL over DoH | Answers `need.to.know.only`; public resolvers are blocked. |
+| Browser HSTS preload list | 10 MB JSON, not worth the fetch. |
+| A public resolver's JSON API on a non-standard port | Timed out. |
+| Several protective resolvers | No JSON API exists; DNS wireformat only. |
+| A community disposable-domain list at its documented raw path | 404, the file had been renamed. |
+| SOA serial as an age proxy | Weak. For a non-existent name the SOA comes from the parent zone, and for existing ones the serial tracks zone edits rather than creation. |
+
+## Removed by design
+
+Not failures — deliberate scope decisions, recorded so they are not relitigated.
+
+**No third-party reputation lookups at all.** Every signal derives from the domain's own configuration,
+pricing and content. This removed the disposable-domain lists and the protective-DNS consensus across
+several filtering resolvers, along with the wireformat DNS dependency that existed only to query them.
+The trade: no list staleness or per-request download cost, and the model generalises to domains
+registered minutes ago that no feed has seen, at the cost of never being able to say a domain is
+*known* bad.
+
+**Deliverability checks**, meaning RFC 7505 null MX, dangling MX and the no-MX cases. The reasoning
+inverts under this threat model: an account farmer must receive the verification or OTP message, so
+working mail is a precondition of the abuse rather than evidence of it. An undeliverable domain
+describes a signup that fails at verification anyway, which the signup flow establishes for free. It
+also cannot discriminate, because every domain the model hunts will pass it.
+
+**Local-part heuristics** in full, including entropy, keyboard walks, trailing-digit templates,
+throwaway vocabulary, role addresses and dot or plus-tag canonicalisation. Legitimate bulk patterns are
+common and indistinguishable from farmed ones: a teacher registering a class, a family, or a team
+creating sequential accounts all produce exactly those shapes. The false-positive cost lands on
+ordinary users rather than abusers. A full address is still accepted as input, but the local part is
+discarded.
+
+**Popularity ranking.** It cannot separate the two populations that matter: large free providers are
+unblockable at domain level and handled by the out-of-scope short circuit, while real small businesses
+are absent from popularity lists entirely.
+
+**Brand-impersonation signals**, including punycode and homoglyph scoring, mixed-script detection,
+brand edit distance and brand-plus-keyword heuristics. These are phishing concerns, not account
+farming. IDN to A-label normalisation stays, because lookups fail without it, but it is plumbing rather
+than a scored signal.
+
+**Phishing feeds.** Near-zero recall for signup abuse, and a multi-megabyte fetch per request is
+indefensible.
+
+**Live TLS handshake.** Phishing-oriented, so it was dropped on its own merits. The secondary argument
+for dropping it — that it removed the last need for raw outbound TCP from a serverless function — no
+longer applies, since the port-43 collector reintroduced that dependency deliberately. What changed is
+that the dependency is now paying for the anchor signal wherever RDAP cannot answer, across the 872
+suffixes that publish a port-43 server, rather than for a phishing check the threat model does not want.
+
+**Hosting reputation** as a whole: ASN and prefix lookups, DROP list membership and PTR checks. A farm
+domain often has no website at all, so its hosting says little, and the traps are real: shared reseller
+hosting in a recently allocated prefix is how a great many legitimate small businesses are hosted.
+
+**URL scanning services, passive DNS and technical-news mentions.** All returned nothing useful for a
+real low-traffic business, so they cost latency to confirm silence.
+
+**Certificate transparency**, in full. The unauthenticated issuance endpoint returns a paginated recent
+window, so a domain registered fifteen years ago can report a first issuance only months old. That
+restricted it to raising a *lower bound* on age, which the registration record already establishes
+better wherever it exists — and where it does not, the bound was too weak to reason from. Certificate
+name breadth went with it: it duplicated what DNS record breadth already measures, at the cost of a
+whole source. The detail beyond a first-seen bound was never in scope either: OV/EV subject bonuses,
+SAN sibling clustering, issuance velocity, and wildcard or SAN-sprawl checks.
+
+**The web archive index.** It was kept as the only independent age source for the suffixes that publish
+no RDAP, and it did not earn that. It was the slowest source measured by a wide margin, timed out
+entirely at 20 s during calibration, and needed a separate extended deadline in the orchestrator to have
+any chance at all. What it bought was a lower bound on age for a minority of domains, which is not worth
+a source that usually fails. Age now comes from the registration record alone.
+
+Removing both also removes the drop-catch override, which needed an independent history to establish a
+gap against the registration date. RDAP's `lastChanged` fires on any modification at all, so it cannot
+substitute: on its own it penalises well-run domains for being actively maintained. Age credit is
+therefore inherited by whoever recaught a lapsed domain, which is a known gap.
+
+**MTA-STS, TLS-RPT and CAA.** MTA-STS was NXDOMAIN even for major financial and broadcast domains that
+do everything else right. CAA costs a query for a near-zero-weight signal.
+
+**Content maturity extras**: `ads.txt`, app-association files, security headers, analytics IDs, favicon
+hashing and sitemap analysis, plus scam-shop heuristics such as wallet prompts, messaging-app contact
+links and "established since" contradictions. The messaging-app check in particular encoded a
+geographic bias against legitimate businesses.
+
+## Deferred
+
+**Cohort detection**, which requires storage. The same registrar plus the same nameservers plus
+creation timestamps inside the same minute identifies bulk registration directly, and it is among the
+strongest available signals for account farming. `DomainFacts` retains the raw registrar, nameserver
+and creation-timestamp values so this becomes possible without a re-crawl. It remains deferred: every
+signal currently evaluated by the service is stateless.

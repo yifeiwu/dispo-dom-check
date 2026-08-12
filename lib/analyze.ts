@@ -1,0 +1,298 @@
+import { BUDGET, isOk, runCollector, type CollectorResult } from './collector';
+import { RequestScopedCache, type AnalysisCache } from './cache';
+import { referenceCache } from './reference-cache';
+import { collectDns } from './collect/dns';
+import { collectRdap } from './collect/rdap';
+import { collectWhois, type WhoisResult } from './collect/whois';
+import { collectMail } from './collect/mail';
+import { collectSignup } from './collect/signup';
+import { PRICING_SOURCE_URL, collectPricing } from './collect/pricing';
+import { collectSite } from './collect/site';
+import { detectRegistrarDefault } from './data/registrar-defaults';
+import {
+  toSourceStatus,
+  type DomainFacts,
+  type PricingFacts,
+  type RegistrationFacts,
+  type SourceStatus,
+} from './facts';
+import { nameFacts } from './scoring/signals';
+import { score, type ScoreResult } from './scoring/score';
+import { DEFAULT_CONFIG } from './scoring/weights';
+import type { NormalisedInput } from './domain';
+
+/**
+ * Orchestration, and the place the never-block contract is actually enforced.
+ *
+ * Collectors run concurrently under `Promise.allSettled` with a per-source deadline and a global
+ * deadline. Whatever finished is scored; whatever did not is recorded with a status and a reason and
+ * contributes no points. There is no path here that turns a source failure into a worse verdict.
+ *
+ * The dependency shape is why this is not simply one `Promise.all`: mail classification needs the MX
+ * records, so DNS runs first and the rest fan out from it. DNS is therefore the one source whose loss
+ * costs several dimensions, which is why two resolvers are tried inside that collector.
+ */
+
+export type AnalysisResult = {
+  domain: string;
+  submittedHost: string;
+  fromEmailAddress: boolean;
+  analysedAt: string;
+  elapsedMs: number;
+  facts: DomainFacts;
+  score: ScoreResult;
+};
+
+export type AnalysisOptions = {
+  /**
+   * Called as each source settles, for a caller that wants to report progress before the analysis is
+   * finished. Purely an observer: it cannot alter the result, and the same statuses appear in
+   * `facts.sources` regardless of whether it is supplied.
+   */
+  onSource?: (status: SourceStatus) => void;
+};
+
+/**
+ * The cache defaults to the reference store, which holds only the registry bootstrap. No domain-specific
+ * result is cached anywhere: every domain is analysed from scratch on every request.
+ */
+export async function analyze(
+  input: Extract<NormalisedInput, { kind: 'ok' }>,
+  cache: AnalysisCache = referenceCache,
+  options: AnalysisOptions = {},
+): Promise<AnalysisResult> {
+  const startedAt = Date.now();
+  const analysedAt = new Date().toISOString();
+
+  // Shared for the lifetime of this request only, so the bootstrap is fetched at most once even when the
+  // injected cache is a passthrough.
+  const requestCache = new RequestScopedCache();
+  const layered: AnalysisCache = {
+    async get(key) {
+      return (await requestCache.get(key)) ?? (await cache.get(key));
+    },
+    async set(key, value, ttl) {
+      await requestCache.set(key, value, ttl);
+      await cache.set(key, value, ttl);
+    },
+  };
+
+  const remaining = () => Math.max(500, BUDGET.globalMs - (Date.now() - startedAt));
+  const perSource = () => Math.min(BUDGET.perSourceMs, remaining());
+  const siteSource = () => Math.min(BUDGET.siteMs, remaining());
+
+  const sources: SourceStatus[] = [];
+  const record = (result: CollectorResult<unknown>) => {
+    sources.push(toSourceStatus(result));
+    return result;
+  };
+
+  /**
+   * Per-source notification, hooked to the promise rather than to `record`.
+   *
+   * The second wave is only recorded once `Promise.allSettled` has resolved, so recording is the wrong
+   * place to observe a source landing: all four would report together at the end of the wave, which is
+   * precisely the thing a progress caller is trying to avoid showing. Attaching here reports each source
+   * when it actually settles. `record` still runs afterwards and still builds `sources` in a fixed
+   * order, so what the analysis returns does not depend on the order things came back in.
+   */
+  const notify = <T>(pending: Promise<CollectorResult<T>>): Promise<CollectorResult<T>> => {
+    const { onSource } = options;
+    if (!onSource) return pending;
+
+    pending.then(
+      (result) => {
+        try {
+          onSource(toSourceStatus(result));
+        } catch {
+          // A consumer that has gone away — a closed response stream is the expected case — must not be
+          // able to fail an analysis that is otherwise proceeding normally.
+        }
+      },
+      // `runCollector` converts its own failures, so this is unreachable short of a bug. It is attached
+      // anyway, because an unhandled rejection here would be a crash rather than a missing status.
+      () => {},
+    );
+    return pending;
+  };
+
+  // Registration age is meaningless for a platform-issued name, so those sources are skipped with a
+  // reason rather than queried and discarded.
+  const providerScoped = Boolean(input.providerSuffix);
+
+  // First wave: the two fast sources everything else depends on. DNS gates the mail collectors, which
+  // cannot classify anything without MX records.
+  const [dnsResult, rdapResult] = await Promise.all([
+    notify(
+      runCollector('dns', 'https://dns.google/resolve', () =>
+        collectDns(input.domain, perSource()),
+      ),
+    ),
+    notify(
+      providerScoped
+        ? skipped<{ facts: RegistrationFacts; sourceUrl: string }>(
+            'rdap',
+            `Registration belongs to ${input.providerSuffix?.provider}, not to this name`,
+          )
+        : runCollector('rdap', undefined, () =>
+            collectRdap(input.domain, input.suffix, layered, perSource()),
+          ),
+    ),
+  ]);
+  record(dnsResult);
+  record(rdapResult);
+  const dns = isOk(dnsResult) ? dnsResult.data : undefined;
+
+  /**
+   * Port 43 runs where RDAP has not produced an answer: either the suffix has no RDAP service at all,
+   * which `unsupported` is precisely the statement of, or the server exists and did not respond.
+   *
+   * The second case was previously excluded, on the reasoning that a failed request is not a missing
+   * protocol and retrying it over the slowest transport in the system would re-ask a question already
+   * asked of the better source. The measurement says otherwise on both halves. The question is not
+   * answered — 14% of the labelled holdout got no registration record this way — and it is not a
+   * transient failure either: the registries responsible rate limit by dropping the connection rather
+   * than returning a status, so every domain under them stalls identically until the deadline fires, and
+   * `rate_limited` never appears. Since age is the heaviest-weighted signal in the model, that is the
+   * most expensive gap available to close.
+   *
+   * `unavailable` is deliberately not included. That is a registry that answered and said no, which is
+   * an answer, and port 43 agrees with it.
+   *
+   * It rides in the second wave rather than after the first. Nothing downstream depends on it, so
+   * serialising it behind RDAP would add its whole deadline to the critical path of every ccTLD lookup
+   * for no ordering benefit. That placement is also why the retry is free: the wave is already bounded
+   * by the site probe's longer deadline, so a WHOIS attempt beside it adds no wall-clock time at all.
+   */
+  const rdapAnswered = rdapResult.status !== 'timeout' && rdapResult.status !== 'rate_limited';
+  const whoisApplies = !providerScoped && (rdapResult.status === 'unsupported' || !rdapAnswered);
+  const whoisMs = Math.min(BUDGET.whoisMs, remaining());
+
+  // Taken once so that the collector's own budget and the deadline enforcing it are the same number.
+  // Given them separately, the deadline was the smaller of the two and cut the collector off mid-chain.
+  const siteMs = siteSource();
+
+  const [whoisResult, mailResult, pricingResult, siteResult] = await Promise.allSettled([
+    notify(
+      whoisApplies
+        ? runCollector(
+            'whois',
+            undefined,
+            () => collectWhois(input.domain, input.suffix, whoisMs),
+            whoisMs,
+          ).then(carryNotice)
+        : skipped<WhoisResult>(
+            'whois',
+            providerScoped
+              ? `Registration belongs to ${input.providerSuffix?.provider}, not to this name`
+              : `The .${input.suffix} registry publishes RDAP, which was used instead`,
+          ),
+    ),
+    notify(
+      runCollector('mail', 'https://dns.google/resolve', () =>
+        collectMail(input.domain, dns, perSource()),
+      ),
+    ),
+    notify(
+      providerScoped
+        ? skipped<{ facts: PricingFacts; sourceUrl: string }>(
+            'pricing',
+            `This name has no registry price: it was issued by ${input.providerSuffix?.provider}`,
+          )
+        : // A committed snapshot rather than a network call, so this needs no deadline of its own.
+          runCollector('pricing', PRICING_SOURCE_URL, async () => collectPricing(input.suffix)),
+    ),
+    notify(
+      runCollector(
+        'site',
+        `https://${input.domain}/`,
+        () => collectSite(input.domain, dns, siteMs),
+        siteMs,
+      ),
+    ),
+  ]);
+
+  const whois = settled(whoisResult, record);
+  const mail = settled(mailResult, record);
+  const pricing = settled(pricingResult, record);
+  const site = settled(siteResult, record);
+
+  // One field regardless of protocol, so every registration signal reads the same shape.
+  const registration = (isOk(rdapResult) ? rdapResult.data : undefined)?.facts ?? whois?.facts;
+
+  // Mail classification depends on both DNS and the parsed SPF record, so it runs last and cheaply.
+  const signupResult = await notify(
+    runCollector('signup', undefined, () =>
+      collectSignup(input.domain, dns, mail?.spf, Math.min(BUDGET.signupMs, remaining())),
+    ),
+  );
+  record(signupResult);
+  const signup = isOk(signupResult) ? signupResult.data : undefined;
+
+  const facts: DomainFacts = {
+    meta: {
+      domain: input.domain,
+      suffix: input.suffix,
+      label: input.label,
+      submittedHost: input.submittedHost,
+      fromEmailAddress: input.fromEmailAddress,
+      providerSuffix: input.providerSuffix,
+      relayDomain: input.relayDomain,
+      vettedSuffix: input.vettedSuffix,
+      analysedAt,
+    },
+    registration,
+    dns,
+    mail,
+    signup,
+    registrarDefault: detectRegistrarDefault(registration, dns, signup),
+    pricing: pricing?.facts,
+    site,
+    name: nameFacts(input.label),
+    sources,
+  };
+
+  return {
+    domain: input.domain,
+    submittedHost: input.submittedHost,
+    fromEmailAddress: input.fromEmailAddress,
+    analysedAt,
+    elapsedMs: Date.now() - startedAt,
+    facts,
+    score: score(facts, DEFAULT_CONFIG),
+  };
+}
+
+/**
+ * A registry can answer in full and still publish no registration date, so the collector's notice is
+ * carried onto an `ok` status. Without it the panel would read "answered" beside an empty age dimension
+ * and leave the reader to work out which of the two was at fault.
+ *
+ * Applied to the promise rather than at the point of recording, so a caller watching sources settle is
+ * told the same thing as a caller reading the finished result.
+ */
+function carryNotice(result: CollectorResult<WhoisResult>): CollectorResult<WhoisResult> {
+  if (result.status !== 'ok' || !result.data?.notice) return result;
+  return { ...result, reason: result.data.notice };
+}
+
+/**
+ * `runCollector` already converts every failure into a result, so a rejected promise here would mean a
+ * bug rather than a source problem. It is still handled, because a crash in the orchestrator must not be
+ * able to fail the whole request.
+ */
+function settled<T>(
+  outcome: PromiseSettledResult<CollectorResult<T>>,
+  record: (result: CollectorResult<T>) => unknown,
+): T | undefined {
+  if (outcome.status === 'rejected') return undefined;
+  record(outcome.value);
+  return outcome.value.status === 'ok' ? outcome.value.data : undefined;
+}
+
+async function skipped<T>(
+  source: CollectorResult<T>['source'],
+  reason: string,
+): Promise<CollectorResult<T>> {
+  return { source, status: 'skipped', reason, elapsedMs: 0 };
+}

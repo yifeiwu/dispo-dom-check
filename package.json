@@ -1,0 +1,37 @@
+{
+  "name": "domain-legitimacy-scorer",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "refresh:pricing": "node scripts/refresh-pricing.mjs",
+    "refresh:whois": "node scripts/refresh-whois-servers.mjs",
+    "probe": "node scripts/probe.mjs",
+    "calibrate": "tsx scripts/calibrate.mts",
+    "audit": "tsx scripts/signal-audit.mts"
+  },
+  "dependencies": {
+    "next": "15.5.23",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "tldts": "^6.1.58"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.23",
+    "tailwindcss": "^4",
+    "tsx": "^4.19.2",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  }
+}

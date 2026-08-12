@@ -1,0 +1,152 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { collectSite } from '@/lib/collect/site';
+import { BUDGET } from '@/lib/collector';
+import { probe } from '@/lib/fetch';
+
+/**
+ * Redirects are followed by `lib/fetch.ts` rather than by the runtime, for two reasons that these pin.
+ *
+ * `normaliseInput` rejects address literals and reserved names before anything is probed, but a redirect
+ * target is a host chosen by the domain under analysis rather than by the caller. Handed to the platform,
+ * the chain is capped at twenty hops and revalidated nowhere, so the boundary's decision held for exactly
+ * one request and a domain answering `302 http://169.254.169.254/` had its target fetched, read, and
+ * reported back with the status, size and title attached to the result.
+ */
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
+});
+
+function stubNetwork(handler: (url: string) => Response) {
+  const urls: string[] = [];
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    urls.push(url);
+    return handler(url);
+  }) as unknown as typeof fetch;
+  return { urls };
+}
+
+const redirectTo = (location: string) =>
+  new Response(null, { status: 302, headers: { location } });
+
+const page = (title: string) =>
+  new Response(`<html><head><title>${title}</title></head><body>${'x '.repeat(400)}</body></html>`, {
+    status: 200,
+  });
+
+describe('redirect chain', () => {
+  it('follows an ordinary redirect and reports where it landed', async () => {
+    stubNetwork((url) => (url === 'https://example.com/' ? redirectTo('https://elsewhere.com/') : page('Elsewhere')));
+
+    const result = await probe('https://example.com/', { redirect: 'follow' });
+
+    expect(result.status).toBe(200);
+    expect(result.finalUrl).toBe('https://elsewhere.com/');
+  });
+
+  it('resolves a relative location against the hop it came from', async () => {
+    stubNetwork((url) => (url === 'https://example.com/' ? redirectTo('/welcome') : page('Welcome')));
+
+    const result = await probe('https://example.com/', { redirect: 'follow' });
+
+    expect(result.finalUrl).toBe('https://example.com/welcome');
+  });
+
+  /**
+   * The case the guard exists for. A public name is the only thing the boundary lets through, so a
+   * redirect is the one way to aim the probe at an address it already refused.
+   */
+  it.each([
+    ['a loopback address', 'http://127.0.0.1:6379/'],
+    ['a link-local address', 'http://169.254.169.254/latest/meta-data/'],
+    ['a private address', 'http://10.0.0.1/'],
+    ['an IPv6 literal', 'http://[::1]/'],
+    ['localhost', 'http://localhost:8080/'],
+    ['a reserved suffix', 'http://admin.internal/'],
+    ['a non-http scheme', 'file:///etc/passwd'],
+  ])('refuses to follow a redirect to %s', async (_case, target) => {
+    const { urls } = stubNetwork((url) =>
+      url === 'https://example.com/' ? redirectTo(target) : page('Should never be fetched'),
+    );
+
+    const result = await probe('https://example.com/', { redirect: 'follow' });
+
+    expect(urls).toEqual(['https://example.com/']);
+    expect(result.status).toBe(302);
+    expect(result.finalUrl).toBe('https://example.com/');
+    expect(result.body).toBe('');
+  });
+
+  it('stops at the hop limit rather than the runtime default of twenty', async () => {
+    const { urls } = stubNetwork((url) => redirectTo(`${url}a`));
+
+    await probe('https://example.com/', { redirect: 'follow' });
+
+    // The first request plus one per permitted hop.
+    expect(urls).toHaveLength(BUDGET.maxRedirects + 1);
+  });
+
+  /**
+   * A signal per hop would let a chain multiply its collector's budget by the hop limit, which is the
+   * quiet way a redirect turns into a timeout somewhere else in the analysis.
+   */
+  it('bounds the whole chain by one deadline rather than each hop separately', async () => {
+    const signals = new Set<AbortSignal>();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      if (signal) signals.add(signal);
+      return redirectTo(`${String(input)}a`);
+    }) as unknown as typeof fetch;
+
+    await probe('https://example.com/', { redirect: 'follow', timeoutMs: 1_000 });
+
+    expect(signals.size).toBe(1);
+  });
+
+  it('leaves a request that opted out of following alone', async () => {
+    const { urls } = stubNetwork(() => redirectTo('https://elsewhere.com/'));
+
+    const result = await probe('https://example.com/', { redirect: 'manual' });
+
+    expect(urls).toEqual(['https://example.com/']);
+    expect(result.status).toBe(302);
+  });
+});
+
+describe('site collector on a refused redirect', () => {
+  /**
+   * Reported as reached but saying nothing, which is the honest reading: the domain answered and pointed
+   * somewhere this probe will not go. Nothing about the target is read, so nothing about it can be
+   * scored or shown, and the domain is not penalised for a fetch we declined to make.
+   */
+  it('reports the domain reachable without reading or naming the target', async () => {
+    stubNetwork((url) =>
+      url.startsWith('https://') ? redirectTo('http://169.254.169.254/latest/meta-data/') : page('Fallback'),
+    );
+
+    const site = await collectSite('example.com', undefined, 2_000);
+
+    expect(site.reachable).toBe(true);
+    expect(site.substantive).toBe(false);
+    expect(site.finalUrl).toBe('https://example.com/');
+    expect(site.redirectedOffDomain).toBe(false);
+    expect(site.redirectTarget).toBeUndefined();
+    expect(site.title).toBeUndefined();
+  });
+
+  it('still classifies a permitted off-domain redirect', async () => {
+    stubNetwork((url) =>
+      url === 'https://example.com/' ? redirectTo('https://sedo.com/parked') : page('Domain for sale'),
+    );
+
+    const site = await collectSite('example.com', undefined, 2_000);
+
+    expect(site.redirectedOffDomain).toBe(true);
+    expect(site.redirectTarget?.host).toBe('sedo.com');
+    expect(site.parked).toBe(true);
+  });
+});
