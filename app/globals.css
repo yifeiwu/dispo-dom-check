@@ -9,10 +9,22 @@
   --color-surface: #0b0f14;
   --color-surface-raised: #121820;
   --color-surface-sunken: #080b0f;
+
+  /*
+   * Two weights of boundary, because WCAG asks two different things of them. `edge` divides and
+   * outlines, which 1.4.11 exempts as decoration; `edge-strong` is for a border that is itself the
+   * affordance, such as the one telling a reader where the domain field is, and clears 3:1 against
+   * every surface. Raising `edge` to that would have lightened every divider in the app to fix two
+   * controls. Verified by `test/contrast.test.ts`.
+   */
   --color-edge: #1e2733;
+  --color-edge-strong: #5a6b7e;
+
   --color-ink: #e8edf4;
   --color-ink-muted: #94a3b3;
-  --color-ink-faint: #64748b;
+  /* Clears 4.5:1 on all three surfaces. At the previous #64748b it was 3.75:1 on `surface-raised`,
+     which is where most of it is drawn, and it carries prose rather than decoration. */
+  --color-ink-faint: #7d8b9d;
 
   /* One colour per verdict band, ordered risk to legitimacy, so a band is defined in exactly one place. */
   --color-danger: #f87171;
@@ -65,9 +77,20 @@ body {
   animation: rise 320ms ease-out both;
 }
 
+/*
+ * Everything, rather than the two animations named above.
+ *
+ * Those two were guarded individually and the guard then failed to cover the one animation that
+ * actually warranted it: the pulsing dot on an unsettled source, which repeats indefinitely while a
+ * slow registry is queried. A blanket rule cannot be escaped by the next animation somebody adds,
+ * which is the only version of this that stays true.
+ */
 @media (prefers-reduced-motion: reduce) {
-  .arc-value,
-  .rise {
-    animation: none;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

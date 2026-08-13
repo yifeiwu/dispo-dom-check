@@ -14,6 +14,46 @@ export function verdictFor(legitimacy: number, confidence: number, cfg: ScoringC
   return band?.verdict ?? 'unclear';
 }
 
+/** Where a score sits inside the band it landed in, and what is on the other side of the nearer edge. */
+export type BandPosition = {
+  min: number;
+  max: number;
+  /** Absent only where the band has no neighbour on either side, which no configured band has. */
+  nearest?: { verdict: Verdict; distance: number; direction: 'below' | 'above' };
+};
+
+/**
+ * The band boundaries either side of a score, and which edge it is closer to.
+ *
+ * A band is a range, and reporting only its name throws away where in that range the domain landed:
+ * 55 and 69 are both "Probably legitimate" and mean quite different things, while a 40 is one point
+ * from being called "Unclear" instead. Anyone deciding how much friction to put in front of a signup
+ * is better served knowing the score is marginal than knowing which side of a boundary it fell.
+ *
+ * Withheld and out-of-scope verdicts have no band to be positioned in and return nothing rather than
+ * an invented one.
+ */
+export function bandPosition(legitimacy: number, cfg: ScoringConfig): BandPosition | undefined {
+  const index = cfg.verdictBands.findIndex((entry) => legitimacy <= entry.maxScore);
+  if (index === -1) return undefined;
+
+  const min = index === 0 ? 0 : cfg.verdictBands[index - 1].maxScore + 1;
+  const max = cfg.verdictBands[index].maxScore;
+
+  const below = index === 0 ? undefined : cfg.verdictBands[index - 1];
+  const above = cfg.verdictBands[index + 1];
+
+  const candidates = [
+    below && { verdict: below.verdict, distance: legitimacy - min + 1, direction: 'below' as const },
+    above && { verdict: above.verdict, distance: max - legitimacy + 1, direction: 'above' as const },
+  ].filter((entry) => entry !== undefined);
+
+  // Ties go to the lower edge, which is the direction a reader adding friction cares about.
+  const nearest = candidates.sort((a, b) => a.distance - b.distance)[0];
+
+  return { min, max, nearest };
+}
+
 export const VERDICT_LABELS: Record<Verdict, string> = {
   high_risk: 'High risk',
   suspicious: 'Suspicious',

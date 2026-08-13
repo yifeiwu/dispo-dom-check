@@ -16,7 +16,7 @@
     "audit": "tsx scripts/signal-audit.mts"
   },
   "dependencies": {
-    "next": "15.5.23",
+    "next": "^16.3.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "tldts": "^6.1.58"
@@ -24,11 +24,16 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.5",
+    "axe-core": "^4.13.0",
     "eslint": "^9",
     "eslint-config-next": "15.5.23",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4",
     "tsx": "^4.19.2",
     "typescript": "^5",

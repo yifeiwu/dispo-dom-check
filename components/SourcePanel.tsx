@@ -54,7 +54,9 @@ function SourceRow({
             }`}
           />
         ) : null}
-        <span className="truncate">{SOURCE_LABELS[source] ?? source}</span>
+        {/* Wraps rather than truncates. "Registration record (RDAP/WHOIS)" does not fit the column, and
+            a source panel whose whole purpose is saying what answered cannot elide which source. */}
+        <span>{SOURCE_LABELS[source] ?? source}</span>
       </span>
       <span className={`text-right sm:text-left ${status ? STATUS_TONE[status.status] ?? '' : 'text-ink-faint'}`}>
         {status ? STATUS_LABELS[status.status] ?? status.status : 'Waiting'}

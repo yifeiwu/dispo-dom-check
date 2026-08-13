@@ -5,7 +5,7 @@ import {
   TimeoutError,
   USER_AGENT,
 } from './collector';
-import { isIpLiteral, isReservedName } from './domain';
+import { isIpLiteral, isReservedName } from './domain-syntax';
 import { capture } from './record';
 
 /**

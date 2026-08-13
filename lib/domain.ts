@@ -3,6 +3,9 @@ import { isConsumerMailProvider } from './data/consumer-mail-providers';
 import { matchProviderSuffix, type ProviderSuffix } from './data/provider-suffixes';
 import { matchVettedSuffix } from './data/vetted-tlds';
 import { RELAY_DOMAINS } from './data/forwarder-mx';
+import { readHost, type RejectionReason } from './domain-syntax';
+
+export { isIpLiteral, isReservedName, type RejectionReason } from './domain-syntax';
 
 /**
  * Input normalisation, and the gate that decides whether an input is worth analysing at all.
@@ -14,15 +17,6 @@ import { RELAY_DOMAINS } from './data/forwarder-mx';
  */
 
 export type OutOfScopeReason = 'shared_free_provider';
-
-export type RejectionReason =
-  | 'empty'
-  | 'malformed'
-  | 'ip_address'
-  | 'localhost'
-  | 'private_suffix'
-  | 'unknown_suffix'
-  | 'too_long';
 
 export type NormalisedInput =
   | {
@@ -53,84 +47,13 @@ export type NormalisedInput =
   | { kind: 'out_of_scope'; domain: string; reason: OutOfScopeReason; explanation: string }
   | { kind: 'rejected'; reason: RejectionReason; explanation: string };
 
-const MAX_INPUT_LENGTH = 253;
-
-const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
-const LOCAL_SUFFIXES = new Set(['localhost', 'local', 'internal', 'test', 'example', 'invalid', 'onion']);
-
-/**
- * An address literal rather than a name.
- *
- * Exported because the boundary is not the only place this question is asked: a redirect target is a
- * host chosen by the domain under analysis, and it has to face the same test the submitted host did.
- */
-export function isIpLiteral(host: string): boolean {
-  return IPV4.test(host) || host.includes(':');
-}
-
-/** A reserved or special-use name, which has no public registration behind it. */
-export function isReservedName(host: string): boolean {
-  const lastLabel = host.split('.').pop() ?? '';
-  return host === 'localhost' || LOCAL_SUFFIXES.has(lastLabel);
-}
-
-/**
- * Reduces an input to the host portion, discarding a local part if one is present.
- * Kept separate and total so it can be tested directly without touching the network.
- */
-function extractHost(raw: string): string | null {
-  let value = raw.trim().toLowerCase();
-  if (!value) return null;
-
-  // Tolerate a pasted URL.
-  value = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
-  value = value.split(/[/?#]/)[0];
-
-  // Discard the local part of an address. Everything before the last `@` goes, and is not retained
-  // anywhere, including in error messages.
-  const at = value.lastIndexOf('@');
-  if (at !== -1) value = value.slice(at + 1);
-
-  // Strip a port and any surrounding brackets from an IPv6 literal.
-  value = value.replace(/^\[|\]$/g, '');
-  value = value.replace(/:\d+$/, '');
-  value = value.replace(/\.$/, '');
-
-  return value || null;
-}
-
 export function normaliseInput(raw: string): NormalisedInput {
-  if (!raw || !raw.trim()) {
-    return { kind: 'rejected', reason: 'empty', explanation: 'Enter a domain or an email address.' };
-  }
-  if (raw.length > MAX_INPUT_LENGTH * 2) {
-    return { kind: 'rejected', reason: 'too_long', explanation: 'That input is too long to be a domain.' };
-  }
+  // Every rejection that does not need the suffix list, decided by the module the browser also runs so
+  // that client and server cannot disagree about what a domain is.
+  const syntax = readHost(raw);
+  if (syntax.kind === 'rejected') return syntax;
 
-  const fromEmailAddress = raw.includes('@');
-  const host = extractHost(raw);
-
-  if (!host) {
-    return { kind: 'rejected', reason: 'malformed', explanation: 'That does not look like a domain.' };
-  }
-  if (host.length > MAX_INPUT_LENGTH) {
-    return { kind: 'rejected', reason: 'too_long', explanation: 'That input is too long to be a domain.' };
-  }
-  if (isIpLiteral(host)) {
-    return {
-      kind: 'rejected',
-      reason: 'ip_address',
-      explanation: 'IP addresses have no registration or mail configuration to analyse.',
-    };
-  }
-
-  if (isReservedName(host)) {
-    return {
-      kind: 'rejected',
-      reason: 'localhost',
-      explanation: 'Reserved and special-use names have no public registration to analyse.',
-    };
-  }
+  const { host, fromEmailAddress } = syntax;
 
   // `allowPrivateDomains` makes tldts return the PSL private section, so a platform-issued name is
   // reported at its own boundary rather than at the platform's registrable domain.

@@ -38,7 +38,9 @@ export function DimensionBars({ dimensions }: { dimensions: DimensionSubtotal[] 
               key={dimension.dimension}
               className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 sm:grid-cols-[9.5rem_minmax(0,1fr)_3.5rem] sm:gap-y-0"
             >
-              <span className="truncate text-xs text-ink-muted sm:col-start-1">
+              {/* Wraps rather than truncates: the column is narrower than "Registration economics" and
+                  an ellipsis here would hide which dimension the bar beside it belongs to. */}
+              <span className="text-xs text-ink-muted sm:col-start-1">
                 {DIMENSION_LABELS[dimension.dimension] ?? dimension.dimension}
               </span>
 
@@ -65,7 +67,7 @@ export function DimensionBars({ dimensions }: { dimensions: DimensionSubtotal[] 
       </ul>
 
       {capped.length > 0 ? (
-        <p className="text-xs leading-relaxed text-ink-faint">
+        <p className="text-sm leading-relaxed text-ink-faint">
           <span aria-hidden>* </span>
           {capped.length === 1
             ? `${DIMENSION_LABELS[capped[0].dimension] ?? capped[0].dimension} reached its limit and was cut from ${capped[0].raw} to ${capped[0].clamped}.`

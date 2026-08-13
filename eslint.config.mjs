@@ -1,6 +1,7 @@
 import { dirname } from "path";
 import { fileURLToPath } from "url";
 import { FlatCompat } from "@eslint/eslintrc";
+import jsxA11y from "eslint-plugin-jsx-a11y";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -19,6 +20,18 @@ const eslintConfig = [
       "build/**",
       "next-env.d.ts",
     ],
+  },
+  {
+    /*
+     * The full accessibility rule set, not the six rules `next/core-web-vitals` bundles.
+     *
+     * Only the `rules` are taken. The flat config also carries a `plugins` key, and `next/core-web-vitals`
+     * has already registered `jsx-a11y` under that same name, which flat config refuses to let anything
+     * redefine. Depending on the package explicitly is still worth doing: it pins which rule set is being
+     * asked for, so upgrading Next cannot quietly change the answer.
+     */
+    files: ["**/*.{jsx,tsx}"],
+    rules: jsxA11y.flatConfigs.strict.rules,
   },
   {
     // Tailwind v3 accepted `text-[--color-ink]` as shorthand for a custom property. Tailwind v4 does

@@ -1,4 +1,5 @@
-import type { Verdict } from '@/lib/scoring/weights';
+import { bandPosition, VERDICT_LABELS } from '@/lib/scoring/verdict';
+import { DEFAULT_CONFIG, type Verdict } from '@/lib/scoring/weights';
 
 /**
  * Two numbers, never one: the score and how much evidence stands behind it.
@@ -51,6 +52,16 @@ export function ScoreGauge({
   // Below the threshold the verdict is withheld, so the arc is dashed to show the score is not standing
   // on much rather than letting it render as solidly as a fully evidenced one.
   const withheld = verdict === 'insufficient_evidence';
+
+  /*
+   * A band is a range, and its name alone hides where in that range the domain fell. A 69 and a 55
+   * are both "Probably legitimate"; only one of them is a point away from being called something else,
+   * and that is the thing worth knowing before deciding how much friction a signup deserves.
+   *
+   * Withheld verdicts get none of this: the band they would fall in is exactly the guess the
+   * confidence floor exists to refuse.
+   */
+  const band = withheld ? undefined : bandPosition(legitimacy, DEFAULT_CONFIG);
 
   return (
     <div className="flex flex-col items-center gap-4 sm:flex-row sm:gap-6">
@@ -108,7 +119,7 @@ export function ScoreGauge({
 
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
           <span className={`text-3xl font-semibold tabular-nums ${colours.text}`}>{legitimacy}</span>
-          <span className="text-[10px] uppercase tracking-wide text-ink-faint">legitimacy</span>
+          <span className="text-xs uppercase tracking-wide text-ink-faint">legitimacy</span>
         </div>
       </div>
 
@@ -119,13 +130,30 @@ export function ScoreGauge({
           {verdictLabel}
         </div>
 
+        {band ? (
+          <p className="mt-2 max-w-xs text-sm leading-relaxed text-ink-muted">
+            <span className="tabular-nums">
+              {verdictLabel} runs {band.min} to {band.max}.
+            </span>
+            {band.nearest ? (
+              <>
+                {' '}
+                <span className="tabular-nums">{band.nearest.distance}</span>{' '}
+                {band.nearest.distance === 1 ? 'point' : 'points'}{' '}
+                {band.nearest.direction === 'below' ? 'lower' : 'higher'} would read{' '}
+                {VERDICT_LABELS[band.nearest.verdict].toLowerCase()}.
+              </>
+            ) : null}
+          </p>
+        ) : null}
+
         <dl className="mt-3 flex justify-center gap-6 text-sm sm:justify-start">
           <div>
-            <dt className="text-[10px] uppercase tracking-wide text-ink-faint">Risk</dt>
+            <dt className="text-xs uppercase tracking-wide text-ink-faint">Risk</dt>
             <dd className="mt-0.5 text-lg font-semibold tabular-nums">{100 - legitimacy}</dd>
           </div>
           <div>
-            <dt className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-ink-faint">
+            <dt className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-ink-faint">
               <span aria-hidden className="h-0.5 w-3 rounded-full bg-ink-muted" />
               Confidence
             </dt>
@@ -134,7 +162,7 @@ export function ScoreGauge({
         </dl>
 
         {withheld ? (
-          <p className="mt-2 max-w-xs text-xs leading-relaxed text-ink-faint">
+          <p className="mt-2 max-w-xs text-sm leading-relaxed text-ink-faint">
             Too little answered to call this either way, so the verdict is withheld rather than guessed.
           </p>
         ) : null}

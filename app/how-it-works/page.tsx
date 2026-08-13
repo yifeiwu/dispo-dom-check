@@ -5,6 +5,7 @@ import { VERDICT_DESCRIPTIONS, VERDICT_LABELS } from '@/lib/scoring/verdict';
 import { DEFAULT_CONFIG } from '@/lib/scoring/weights';
 import { DIMENSION_LABELS } from '@/lib/api-types';
 import type { Verdict } from '@/lib/scoring/weights';
+import type { ReactNode } from 'react';
 
 /**
  * Rendered from the same objects the scorer evaluates, which is the entire point.
@@ -15,6 +16,48 @@ import type { Verdict } from '@/lib/scoring/weights';
  * it as data.
  */
 export const dynamic = 'force-static';
+
+/**
+ * The page's own sections, in document order.
+ *
+ * Held as one list because the contents and the headings are otherwise two lists that have to be kept
+ * agreeing by hand, and this page exists precisely to demonstrate that nothing on it is maintained that
+ * way. Renaming a section renames its entry in the contents.
+ */
+const SECTIONS = [
+  { id: 'outputs', title: 'Two outputs, never one number' },
+  { id: 'dimensions', title: 'Dimensions and their limits' },
+  { id: 'heuristics', title: 'Every heuristic, and why it exists' },
+  { id: 'observations', title: 'Collected, reported, never scored' },
+  { id: 'combinations', title: 'Combinations' },
+  { id: 'exclusions', title: 'What this deliberately does not do' },
+] as const;
+
+type SectionId = (typeof SECTIONS)[number]['id'];
+
+const TITLE = Object.fromEntries(SECTIONS.map((section) => [section.id, section.title])) as Record<
+  SectionId,
+  string
+>;
+
+function Section({
+  id,
+  className = 'space-y-3',
+  children,
+}: {
+  id: SectionId;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    // `scroll-mt` so a heading jumped to from the contents does not land flush against the viewport
+    // edge with its first paragraph already half read.
+    <section id={id} className={`scroll-mt-6 ${className}`}>
+      <h3 className="text-base font-semibold">{TITLE[id]}</h3>
+      {children}
+    </section>
+  );
+}
 
 const dimensions = Object.keys(DEFAULT_CONFIG.clamps) as (keyof typeof DEFAULT_CONFIG.clamps)[];
 
@@ -79,7 +122,7 @@ export default function HowItWorks() {
     <article className="space-y-10">
       <header className="space-y-3">
         <h2 className="text-xl font-semibold tracking-tight">How the score is built</h2>
-        <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
+        <p className="max-w-3xl text-base leading-relaxed text-ink-muted">
           The abuse being detected is mass account creation, so the question is not whether a domain is
           malicious but whether it can mint unlimited mailboxes cheaply, and whether it was created to do
           so. Every credit below is paid on evidence somebody other than the domain had to supply, which
@@ -87,7 +130,7 @@ export default function HowItWorks() {
           are still read and still shown, because they are facts a reader wants, but they score nothing
           in either direction.
         </p>
-        <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
+        <p className="max-w-3xl text-base leading-relaxed text-ink-muted">
           This page is generated from the live scoring configuration, model version{' '}
           <span className="font-mono">{DEFAULT_CONFIG.modelVersion}</span>, so it cannot drift from what
           the scorer actually does. The same content is available from{' '}
@@ -95,9 +138,26 @@ export default function HowItWorks() {
         </p>
       </header>
 
-      <section className="space-y-3">
-        <h3 className="text-base font-semibold">Two outputs, never one number</h3>
-        <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
+      {/* The registry below runs to every heuristic in the model, which is long by design and unusable
+          without a way in. */}
+      <nav aria-label="On this page" className="rounded-lg border border-edge bg-surface-raised p-4">
+        <h3 className="text-xs uppercase tracking-wide text-ink-faint">On this page</h3>
+        <ul className="mt-2 space-y-1.5 text-sm">
+          {SECTIONS.map((section) => (
+            <li key={section.id}>
+              <a
+                href={`#${section.id}`}
+                className="text-ink-muted underline decoration-dotted underline-offset-4 transition-colors hover:text-ink"
+              >
+                {section.title}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      <Section id="outputs">
+        <p className="max-w-3xl text-base leading-relaxed text-ink-muted">
           Legitimacy is additive evidence from a neutral {DEFAULT_CONFIG.neutralBase}. Confidence is the
           weighted coverage of the sources that actually answered. The second number exists because
           absence of evidence is not evidence of abuse: a legitimate new small business and a fresh farm
@@ -120,11 +180,10 @@ export default function HowItWorks() {
             </li>
           ))}
         </ul>
-      </section>
+      </Section>
 
-      <section className="space-y-3">
-        <h3 className="text-base font-semibold">Dimensions and their limits</h3>
-        <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
+      <Section id="dimensions">
+        <p className="max-w-3xl text-base leading-relaxed text-ink-muted">
           Every dimension is clamped, so no single one can carry a verdict alone. Signup capability has
           the widest negative range because a throwaway-inbox fingerprint genuinely is close to
           conclusive, while registration economics is negative-only: a cheap suffix is worth noting and
@@ -132,8 +191,10 @@ export default function HowItWorks() {
         </p>
         <ul className="divide-y divide-edge text-sm">
           {dimensions.map((dimension) => (
-            <li key={dimension} className="flex items-baseline gap-4 py-2">
-              <span className="w-52 shrink-0">{DIMENSION_LABELS[dimension] ?? dimension}</span>
+            // The same responsive grid as the verdict list above, rather than the fixed 13rem label
+            // column this used to carry, which left no room for the range on a narrow phone.
+            <li key={dimension} className="grid gap-1 py-2 sm:grid-cols-[13rem_minmax(0,1fr)] sm:gap-4">
+              <span>{DIMENSION_LABELS[dimension] ?? dimension}</span>
               <span className="font-mono text-xs text-ink-muted">
                 {signed(DEFAULT_CONFIG.clamps[dimension].min)} to{' '}
                 {signed(DEFAULT_CONFIG.clamps[dimension].max)}
@@ -141,11 +202,10 @@ export default function HowItWorks() {
             </li>
           ))}
         </ul>
-      </section>
+      </Section>
 
-      <section className="space-y-4">
-        <h3 className="text-base font-semibold">Every heuristic, and why it exists</h3>
-        <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
+      <Section id="heuristics" className="space-y-4">
+        <p className="max-w-3xl text-base leading-relaxed text-ink-muted">
           Each heuristic carries the points it can move the score by, and both the heuristics and the
           dimensions are ordered with the heaviest first. A range means the heuristic is tiered, so what
           it pays depends on how much of the thing it found. These are the points before the clamp above,
@@ -171,11 +231,10 @@ export default function HowItWorks() {
             </ul>
           </div>
         ))}
-      </section>
+      </Section>
 
-      <section className="space-y-3">
-        <h3 className="text-base font-semibold">Collected, reported, never scored</h3>
-        <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
+      <Section id="observations">
+        <p className="max-w-3xl text-base leading-relaxed text-ink-muted">
           These are not heuristics with a weight of zero. They carry no weight at all, and there is no
           number to set: an observation can only report what was seen. Three different findings land a
           fact here. Most are records the domain publishes about itself, which nothing can confirm and
@@ -197,11 +256,10 @@ export default function HowItWorks() {
             </li>
           ))}
         </ul>
-      </section>
+      </Section>
 
-      <section className="space-y-3">
-        <h3 className="text-base font-semibold">Combinations</h3>
-        <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
+      <Section id="combinations">
+        <p className="max-w-3xl text-base leading-relaxed text-ink-muted">
           A purely additive model errs in both directions: it misses conjunctions where each part has an
           innocent explanation that only the combination eliminates, and it double-counts correlated
           signals, which is how a legitimate small business accumulates penalties for being
@@ -214,7 +272,7 @@ export default function HowItWorks() {
             <li key={combination.id}>
               <p className="text-sm font-medium">
                 {combination.label}
-                <span className="ml-2 rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-ink-faint">
+                <span className="ml-2 rounded bg-white/5 px-1.5 py-0.5 text-xs uppercase tracking-wide text-ink-faint">
                   {combination.mode}
                 </span>
               </p>
@@ -224,11 +282,10 @@ export default function HowItWorks() {
             </li>
           ))}
         </ul>
-      </section>
+      </Section>
 
-      <section className="space-y-3">
-        <h3 className="text-base font-semibold">What this deliberately does not do</h3>
-        <ul className="max-w-3xl space-y-2 text-sm leading-relaxed text-ink-muted">
+      <Section id="exclusions">
+        <ul className="max-w-3xl space-y-2 text-base leading-relaxed text-ink-muted">
           <li>
             <span className="font-medium text-ink">Nothing is scored on a third party&rsquo;s opinion. </span>
             No blocklist is consulted and no feed is asked whether a domain is bad, so the model
@@ -265,7 +322,7 @@ export default function HowItWorks() {
             claim being avoided is that an address range is disreputable.
           </li>
         </ul>
-      </section>
+      </Section>
     </article>
   );
 }
