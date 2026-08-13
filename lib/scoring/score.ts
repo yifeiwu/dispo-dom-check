@@ -195,6 +195,17 @@ function computeConfidence(facts: DomainFacts, cfg: ScoringConfig): number {
       present: Boolean(facts.pricing && !facts.pricing.unpriced),
       applicable: !facts.meta.providerSuffix,
     },
+    /*
+     * The reputation source is deliberately absent from this list, and its omission is not an
+     * oversight to be corrected.
+     *
+     * Confidence is coverage of the evidence the verdict rests on, and this source is metered: it can
+     * go dark partway through a month with every other upstream healthy. Given a weight, an exhausted
+     * allowance would drag every domain analysed afterwards toward `insufficient_evidence` — turning a
+     * billing event into a verdict about domains it says nothing about. It can only ever add a
+     * penalty or a single point, so the score already reflects exactly what it did or did not
+     * contribute, and its status is rendered in the source panel regardless.
+     */
   ];
 
   for (const group of groups) {
@@ -224,7 +235,9 @@ function deriveFlags(
   const flags = new Set<ReasonFlag>();
   const fired = new Set(signals.map((signal) => signal.id));
 
-  if (facts.signup?.class === 'temp_mail') flags.add('disposable');
+  // Either route to the same conclusion raises the same flag. A -40 penalty rendered without the pill
+  // that names it would leave a consumer filtering on flags unable to see the reason for the score.
+  if (facts.signup?.class === 'temp_mail' || facts.checkmail?.disposable) flags.add('disposable');
   if (facts.signup?.class === 'forwarder' || facts.meta.relayDomain) flags.add('forwarder');
   if (facts.signup?.class === 'free_routing') flags.add('catch_all_capable');
   if (facts.dns && facts.dns.mx.length === 0) flags.add('no_mx');

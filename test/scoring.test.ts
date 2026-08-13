@@ -5,6 +5,10 @@ import { COMBINATIONS } from '@/lib/scoring/combinations';
 import { DEFAULT_CONFIG } from '@/lib/scoring/weights';
 import {
   accreditedInstitution,
+  checkMailAgreesWithTempMail,
+  checkMailBlocksForRejectedReasons,
+  checkMailClean,
+  checkMailFlagsUnknownMx,
   establishedSmallBusiness,
   farmProfileDomain,
   forwarderDomain,
@@ -15,6 +19,7 @@ import {
   registrarDefaultFarm,
   selfAssertedRecords,
   tempMailDomain,
+  withCheckMail,
 } from './fixtures';
 
 describe('bands', () => {
@@ -362,6 +367,107 @@ describe('removed signals stay removed', () => {
       expect(site.filter((signal) => signal.points < 0), target.class).toEqual([]);
     }
   });
+
+  /*
+   * The alias-relay penalty was removed after firing on twelve families, none of them abuse. Check-Mail
+   * publishes the same classification under `is_email_forwarder`, which is exactly the route a removed
+   * signal comes back by: reinstated at full weight, sourced from a third party, under a field name
+   * that gives no hint of what it contains.
+   */
+  it('does not penalise the reputation service\u2019s own forwarder classification', () => {
+    const domain = withCheckMail(establishedSmallBusiness(), { forwarder: true });
+    const reputation = score(domain).signals.find((signal) => signal.id === 'signup.checkmail');
+    expect(reputation?.points).toBe(DEFAULT_CONFIG.checkmail.clean);
+  });
+});
+
+/**
+ * The one source whose answer is a third party's conclusion rather than an observation of the domain,
+ * and the one signal that credits a point for finding nothing. Both properties are bounded deliberately,
+ * and these are the bounds.
+ */
+describe('third-party reputation verdict', () => {
+  it('credits exactly one point when the service answers and knows nothing against the domain', () => {
+    const reputation = score(checkMailClean()).signals.find(
+      (signal) => signal.id === 'signup.checkmail',
+    );
+
+    // A visible row rather than a silent absence is the entire purpose: the reader can otherwise not
+    // distinguish a domain the vendor cleared from one it was never asked about.
+    expect(reputation?.points).toBe(1);
+    expect(reputation?.evidence).toMatch(/knows nothing against this domain/);
+  });
+
+  it('adds the credit on top of a paid tenant rather than losing it to the dimension clamp', () => {
+    const signup = score(withCheckMail(accreditedInstitution())).dimensions.find(
+      (dimension) => dimension.dimension === 'signup',
+    );
+
+    // The reason `clamps.signup.max` moved from 6 to 7 in 1.4.0. Left at 6, the credit would render as
+    // a point that never reached the total, on precisely the domains most likely to earn both.
+    expect(signup?.clamped).toBe(DEFAULT_CONFIG.signup.paidTenant + DEFAULT_CONFIG.checkmail.clean);
+    expect(signup?.clampApplied).toBe(false);
+  });
+
+  it('catches a disposable operator this model\u2019s own MX table does not recognise', () => {
+    const result = score(checkMailFlagsUnknownMx());
+
+    // The case the source exists for: nothing observable about the domain says this, so without the
+    // lookup it scores as an unremarkable young name.
+    expect(result.flags).toContain('disposable');
+    expect(result.verdict).toBe('high_risk');
+  });
+
+  it('absorbs a second disposable verdict into the clamp rather than charging twice for it', () => {
+    const both = score(checkMailAgreesWithTempMail());
+    const signup = both.dimensions.find((dimension) => dimension.dimension === 'signup');
+
+    // Two sources reaching one conclusion is corroboration, not two problems. Pricing the reputation
+    // verdict at `tempMail` means the floor is already reached and the risk tier is absorbed.
+    expect(signup?.clamped).toBe(DEFAULT_CONFIG.clamps.signup.min);
+    expect(both.legitimacy).toBe(score(tempMailDomain()).legitimacy);
+  });
+
+  it('ignores a block recommendation the model has already rejected the reasoning for', () => {
+    const result = score(checkMailBlocksForRejectedReasons());
+    const reputation = result.signals.find((signal) => signal.id === 'signup.checkmail');
+
+    // `block` is true when a domain is invalid *or* disposable, and deliverability was removed from
+    // this model because an account farmer has to receive the verification message. Scoring the
+    // vendor's headline field would smuggle that judgement back in.
+    expect(reputation?.points).toBe(DEFAULT_CONFIG.checkmail.clean);
+    expect(result.flags).not.toContain('disposable');
+  });
+
+  it('names the parent when the verdict is about something other than the name asked about', () => {
+    const domain = withCheckMail(providerSubdomain(), {
+      disposable: true,
+      risk: 92,
+      baseDomain: 'pages.example',
+    });
+    const reputation = score(domain).signals.find((signal) => signal.id === 'signup.checkmail');
+
+    // A platform-issued name is answered at its parent, and a -40 attributed to a subdomain that did
+    // nothing is a reader being misled rather than informed.
+    expect(reputation?.evidence).toContain('answered for pages.example');
+  });
+
+  it('cannot move a verdict across a band edge on its own', () => {
+    for (const build of [
+      establishedSmallBusiness,
+      modestNewBusiness,
+      farmProfileDomain,
+      parkedWithMail,
+    ]) {
+      const without = score(build());
+      const with_ = score(withCheckMail(build()));
+
+      // The bound that makes the exception to penalise-only-on-positive-evidence affordable. If a
+      // clean answer ever decides a band, the credit has grown past what it can justify.
+      expect(with_.legitimacy - without.legitimacy, build.name).toBeLessThanOrEqual(1);
+      expect(with_.verdict, build.name).toBe(without.verdict);
+    }
+  });
 });
 
 describe('explainability', () => {
@@ -410,6 +516,9 @@ describe('explainability', () => {
       parkedWithMail,
       accreditedInstitution,
       providerSubdomain,
+      checkMailClean,
+      checkMailFlagsUnknownMx,
+      checkMailAgreesWithTempMail,
     ]) {
       for (const scored of score(build()).signals) {
         const weight = SIGNALS.find((signal) => signal.id === scored.id)!.weight(DEFAULT_CONFIG);

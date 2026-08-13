@@ -26,6 +26,10 @@ type FetchOptions = {
   /** Follow redirects. The site probe wants this; API calls generally do not. */
   redirect?: RequestRedirect;
   maxBytes?: number;
+  /** Defaults to GET. Only the Check-Mail collector sends anything else. */
+  method?: string;
+  /** Request body, sent verbatim. The caller supplies its own `content-type`. */
+  body?: string;
 };
 
 /** Retry once on a 429 that advertises a short `Retry-After`, otherwise degrade immediately. */
@@ -80,6 +84,8 @@ async function once(
     return await fetch(url, {
       signal,
       redirect,
+      method: options.method,
+      body: options.body,
       headers: { 'user-agent': USER_AGENT, ...options.headers },
     });
   } catch (error) {
@@ -167,12 +173,25 @@ async function request(
   return { response, finalUrl: current };
 }
 
-/** The request properties that can change the response, and so have to identify it on replay. */
+/**
+ * The request properties that can change the response, and so have to identify it on replay.
+ *
+ * `method` and `requestBody` are here because the Check-Mail collector sends every domain to one
+ * URL and distinguishes them only by the form body. Left out, every domain in a recording would
+ * share a key and replay would answer all of them with whichever was captured first.
+ */
 function descriptorFor(call: 'fetchText' | 'probe' | 'exists', url: string, options: FetchOptions) {
   const headers = Object.fromEntries(
     Object.entries(options.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
   );
-  return { call, url, accept: headers.accept, redirect: options.redirect } as const;
+  return {
+    call,
+    url,
+    accept: headers.accept,
+    redirect: options.redirect,
+    method: options.method,
+    requestBody: options.body,
+  } as const;
 }
 
 /**

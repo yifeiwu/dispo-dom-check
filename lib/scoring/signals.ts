@@ -208,6 +208,80 @@ export const SIGNALS: readonly SignalDefinition[] = [
     },
   },
 
+  {
+    id: 'signup.checkmail',
+    dimension: 'signup',
+    label: 'Third-party reputation verdict',
+    rationale:
+      'Every other signal here reads what the domain publishes about itself, which cannot see abuse history: a name registered minutes ago looks identical whether or not its operator has burned a thousand others. A commercial reputation service watches signups across its own customers and catches new disposable operators within minutes of them appearing, so it reaches the one thing this model has no way to observe. It is also the one judgement here made by somebody else, by means that cannot be inspected or reproduced, which is why only the disposable verdict and the risk score are priced and the vendor\u2019s own block recommendation is not.',
+    weight: (cfg) =>
+      spanning(
+        [
+          cfg.signup.tempMail + Math.min(...cfg.checkmail.riskTiers.map((tier) => tier.points)),
+          cfg.checkmail.clean,
+        ],
+        'by disposable verdict and risk tier; a clean answer credits 1',
+      ),
+    /*
+     * One signal covering three outcomes rather than one signal each.
+     *
+     * Split apart, the clean credit would have to live on exactly one of them and the other would
+     * render as a bare row with nothing to say, or worse, both would pay it and the credit would
+     * double. `age.first_seen` already spans -30 to +20 in a single tiered definition for the same
+     * reason: the outcomes are mutually exclusive readings of one observation.
+     *
+     * Three vendor fields are deliberately never read into the points, and each has a test:
+     *
+     * `block` is the vendor's headline recommendation and is true when a domain is *either* invalid
+     * or disposable. Deliverability was removed from this model on the reasoning that an account
+     * farmer must receive the verification message, so working mail is a precondition of the abuse
+     * rather than evidence of it. Scoring `block` would reintroduce that judgement through a field
+     * whose name gives no hint it contains it.
+     *
+     * `valid` is the same objection stated directly.
+     *
+     * `forwarder` is the vendor's alias-forwarding classification. The audit removed this model's own
+     * relay penalty after it fired on twelve families, none of them abuse, and only ever cost
+     * legitimate domains points; the position since is that alias capability is flagged for the
+     * reader rather than condemned. Reading it here would reinstate the penalty at full weight
+     * through a third party, which is precisely the route a removed signal comes back by.
+     */
+    evaluate(facts, cfg) {
+      const verdict = facts.checkmail;
+      if (!verdict) return null;
+
+      // Named where it differs, because the vendor answers a platform-issued name at its parent and a
+      // penalty presented against the subdomain would be attributed to a name that did nothing.
+      const about = verdict.baseDomain ? ` (answered for ${verdict.baseDomain})` : '';
+      const tier = cfg.checkmail.riskTiers.find((entry) => verdict.risk >= entry.atLeast);
+      const riskPoints = tier?.points ?? 0;
+
+      if (verdict.disposable) {
+        const operator = verdict.provider ? ` operated by ${verdict.provider}` : '';
+        return {
+          points: cfg.signup.tempMail + riskPoints,
+          evidence: `Check-Mail classes this as a disposable-mail domain${operator}, at risk ${verdict.risk} of 100${about}`,
+          sourceUrl: sourceUrlFor(facts, 'checkmail'),
+        };
+      }
+
+      if (riskPoints !== 0) {
+        const why = verdict.text ? `: ${verdict.text}` : '';
+        return {
+          points: riskPoints,
+          evidence: `Check-Mail scores this domain at risk ${verdict.risk} of 100${why}${about}`,
+          sourceUrl: sourceUrlFor(facts, 'checkmail'),
+        };
+      }
+
+      return {
+        points: cfg.checkmail.clean,
+        evidence: `Check-Mail knows nothing against this domain, at risk ${verdict.risk} of 100${about}`,
+        sourceUrl: sourceUrlFor(facts, 'checkmail'),
+      };
+    },
+  },
+
   // ---------------------------------------------------------------------------------------------
   // Registration economics.
   // ---------------------------------------------------------------------------------------------

@@ -67,6 +67,10 @@ const LIVE_SITE: SiteFacts = {
  *
  * WHOIS is skipped rather than answered, which is the normal case: RDAP answered for these profiles, and
  * the port-43 collector runs only where it did not.
+ *
+ * The reputation lookup is `unsupported` for the same kind of reason: most fixtures carry no
+ * `checkmail` facts, and a source claiming `ok` beside no data would be a state the collector cannot
+ * produce. The profiles that do carry a verdict override this entry along with the facts.
  */
 const ALL_OK: DomainFacts['sources'] = [
   { source: 'dns', status: 'ok', elapsedMs: 10 },
@@ -76,7 +80,41 @@ const ALL_OK: DomainFacts['sources'] = [
   { source: 'signup', status: 'ok', elapsedMs: 10 },
   { source: 'pricing', status: 'ok', elapsedMs: 10 },
   { source: 'site', status: 'ok', elapsedMs: 10 },
+  { source: 'checkmail', status: 'unsupported', reason: 'No API key is configured', elapsedMs: 0 },
 ];
+
+/** Swaps the reputation entry to `ok`, for the profiles that carry a verdict. */
+const withCheckMailAnswered = (sources: DomainFacts['sources']): DomainFacts['sources'] =>
+  sources.map((source) =>
+    source.source === 'checkmail'
+      ? { source: 'checkmail', status: 'ok', elapsedMs: 40, sourceUrl: 'https://api.check-mail.org/v2/' }
+      : source,
+  );
+
+/**
+ * Attaches a Check-Mail verdict to any profile, keeping the facts and the source status in step.
+ *
+ * Written as a wrapper rather than as three more standalone profiles because the verdict is orthogonal
+ * to everything else a fixture describes: what matters in these tests is how it combines with the
+ * model's own conclusions, so the same verdict needs applying to profiles that already disagree.
+ */
+export function withCheckMail(
+  profile: DomainFacts,
+  verdict: Partial<DomainFacts['checkmail']> = {},
+): DomainFacts {
+  return {
+    ...profile,
+    checkmail: {
+      disposable: false,
+      risk: 3,
+      block: false,
+      valid: true,
+      forwarder: false,
+      ...verdict,
+    },
+    sources: withCheckMailAnswered(profile.sources),
+  };
+}
 
 export function facts(overrides: Partial<DomainFacts> = {}): DomainFacts {
   const label = overrides.meta?.label ?? 'example';
@@ -403,5 +441,60 @@ export const nothingObserved = (): DomainFacts =>
       { source: 'signup', status: 'unavailable', reason: 'No DNS', elapsedMs: 0 },
       { source: 'pricing', status: 'timeout', reason: 'No response', elapsedMs: 8000 },
       { source: 'site', status: 'unavailable', reason: 'Connection refused', elapsedMs: 500 },
+      { source: 'checkmail', status: 'timeout', reason: 'No response', elapsedMs: 2500 },
     ],
+  });
+
+/**
+ * A legitimate business the reputation service has nothing against, which is the profile the one-point
+ * credit exists for and the only one that can show it reaching the total.
+ */
+export const checkMailClean = (): DomainFacts => withCheckMail(establishedSmallBusiness());
+
+/**
+ * The case that justifies the whole source: a young domain whose mail exchanger this model does not
+ * recognise, which the vendor knows to be a disposable operator. Nothing observable about the domain
+ * says so, and without the lookup it would score as an ordinary unremarkable new name.
+ */
+export const checkMailFlagsUnknownMx = (): DomainFacts =>
+  withCheckMail(
+    facts({
+      registration: {
+        via: 'rdap',
+        creation: daysAgo(45),
+        expiry: yearsAhead(0.87),
+        statuses: [],
+        nameservers: ['ns1.example.net'],
+        termYears: 1,
+      },
+      dns: {
+        ...EMPTY_DNS,
+        a: ['203.0.113.70'],
+        ns: ['ns1.example.net'],
+        mx: [{ priority: 10, host: 'mx.unrecognised-host.example' }],
+      },
+      signup: { class: 'unknown_host', matchedHost: 'mx.unrecognised-host.example', selfHosted: false },
+      pricing: { suffix: 'com', registration: 10.5, renewal: 11.2, renewalRatio: 1.07 },
+    }),
+    { disposable: true, risk: 96, block: true, provider: 'a throwaway-inbox operator' },
+  );
+
+/** Both routes to the same conclusion, which the dimension clamp has to absorb rather than double. */
+export const checkMailAgreesWithTempMail = (): DomainFacts =>
+  withCheckMail(tempMailDomain(), { disposable: true, risk: 99, block: true });
+
+/**
+ * The vendor recommending a block for a reason this model rejects.
+ *
+ * `block` is true whenever a domain is invalid *or* disposable, and an undeliverable domain describes a
+ * signup that fails at verification anyway. `forwarder` is the alias classification whose penalty the
+ * audit removed. Neither may reach the score, and this profile is what proves it.
+ */
+export const checkMailBlocksForRejectedReasons = (): DomainFacts =>
+  withCheckMail(establishedSmallBusiness(), {
+    block: true,
+    valid: false,
+    forwarder: true,
+    risk: 40,
+    text: 'Invalid domain',
   });

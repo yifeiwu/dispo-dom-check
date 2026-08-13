@@ -1,10 +1,23 @@
 # Data sources
 
-Every source is free, requires no API key and no registration. Each was verified live during design;
-the observed behaviour is recorded so a future failure can be told apart from a mistaken assumption.
+Every source is free and requires no registration, with one exception added in `1.4.0`: the Check-Mail
+reputation lookup takes an API key and is metered. It is optional in the strict sense — with no key
+configured it reports `unsupported` and nothing else changes — so a fresh clone still runs every other
+source with no account anywhere. Each source was verified live during design; the observed behaviour is
+recorded so a future failure can be told apart from a mistaken assumption.
 
 Service endpoints appear below because they are operational facts about the system. No analysed domain
 appears anywhere in this repository.
+
+**Analysed domains do leave the system, and did not before `1.4.0`.** Every other source is either a
+committed table or a query about a domain to infrastructure that already knows about it: a registry
+asked about its own registration, a public resolver asked for a record it serves, the domain's own web
+root. The reputation lookup is different in kind. It transmits the domain to a commercial vendor that
+keeps it, and the vendor's homepage carries a public "recently checked domains" list whose relationship
+to API traffic its documentation does not state. Anyone deploying this with a key should assume an
+analysed domain may become publicly visible as having been analysed, and should confirm the current
+position with the vendor if that matters. The local part of an email address is never sent — the model
+discards it long before any collector runs — so what leaves is the domain and nothing else.
 
 ## In use
 
@@ -196,6 +209,48 @@ countries in a way that a backfill could not. See `docs/SCORING.md`.
 - **Soft 404s are detected by status code, not body size**, since a large custom error page is
   otherwise indistinguishable from a real page.
 
+### Check-Mail — third-party reputation (optional, metered)
+
+The only source here that returns somebody else's conclusion rather than an observation, and the only
+one that costs money. It exists because of a gap nothing else in this system can close: every other
+signal reads what a domain publishes about itself, and a name registered an hour ago by an operator who
+has already burned a thousand others publishes exactly what an innocent new name publishes. A vendor
+watching signups across its own customer base sees that history. This model cannot.
+
+- `POST https://api.check-mail.org/v2/` with `Authorization: Bearer $CHECKMAIL_API_KEY` and a form body
+  of `domain=<name>`. The vendor's auth documentation specifies POST while its homepage and FAQ both
+  describe a GET, so the collector falls back to GET on a `405` rather than depending on which page is
+  current.
+- **1,000 lookups a month on the free tier.** This is the only source with a marginal cost per request
+  and the only one that can go dark mid-month with every upstream healthy, so
+  `x-ratelimit-requests-remaining` is read from the response and reported against the source even on
+  success. Without that, exhaustion is invisible until the day it happens.
+- **No key, no problem.** The collector reports `unsupported`, the signal does not fire, and no other
+  dimension changes. This is the state the test suite runs in, pinned in `vitest.config.mts`.
+- **Never runs during calibration.** `lib/analyze.ts` skips it whenever a recording or replay context is
+  active. A collection pass covers several thousand domains against an allowance of one thousand, so
+  running it there would spend the month in a single pass and produce a column that was mostly
+  rate-limit failures — worse than an absent column, because it would look measured. The consequence is
+  that its weights are the only ones in the model never validated against the holdout, and the audit
+  reports it as `KEEP no data, source never answered`.
+- **Only two of its fields are scored**, the disposable verdict and the risk score. Three more are
+  stored and shown as evidence and deliberately never priced, each because it would smuggle back a
+  judgement this model examined and rejected:
+  - `block` is the vendor's own recommendation, and is true when a domain is *either* invalid *or*
+    disposable. Deliverability was rejected as a signal here on the reasoning that an account farmer
+    has to receive the verification message, so working mail is a precondition of the abuse rather than
+    evidence of it.
+  - `valid` is that same objection stated directly.
+  - `is_email_forwarder` duplicates a classification whose penalty the audit removed after it fired on
+    twelve families, none of them abuse. The position since is that alias capability is flagged for the
+    reader rather than condemned, and reading this field would reinstate the penalty at full weight
+    through a third party.
+- **Platform-issued names are queried rather than skipped**, unlike RDAP and pricing. The vendor answers
+  at the registrable parent, and for a free-subdomain provider the parent's reputation is frequently the
+  most informative thing available. Where the returned `base_domain` differs from the name submitted,
+  the evidence string names the parent, so a penalty is never presented as though the subdomain earned
+  it.
+
 ### Bundled tables (no network)
 
 MX fingerprints carry the primary dimension, so they are code versioned with the model rather than a
@@ -246,12 +301,22 @@ them.
 
 Not failures — deliberate scope decisions, recorded so they are not relitigated.
 
-**No third-party reputation lookups at all.** Every signal derives from the domain's own configuration,
-pricing and content. This removed the disposable-domain lists and the protective-DNS consensus across
-several filtering resolvers, along with the wireformat DNS dependency that existed only to query them.
-The trade: no list staleness or per-request download cost, and the model generalises to domains
-registered minutes ago that no feed has seen, at the cost of never being able to say a domain is
-*known* bad.
+**No third-party reputation *feeds*.** Originally this read "no third-party reputation lookups at all",
+and `1.4.0` narrowed it rather than deleting it, because most of what it decided still holds and the
+part that changed is worth being precise about.
+
+What it removed remains removed: the downloadable disposable-domain lists and the protective-DNS
+consensus across several filtering resolvers, along with the wireformat DNS dependency that existed only
+to query them. Those were bulk feeds with a per-request download cost and a staleness problem, and a
+model built on them cannot generalise to a domain registered minutes ago that nothing has seen yet.
+
+What changed is the reasoning about a single point lookup. The rejection had assumed a feed; a query
+about one domain has no staleness cost of its own, and the gap it closes — cross-customer abuse history,
+which nothing observable about a domain reveals — is precisely the gap the rest of the model cannot
+reach by design. So one metered lookup is now consulted, bounded so that the original position still
+governs everything else: it is optional, it holds no weight in confidence, it is one signal in one
+dimension, and every structural signal scores identically with it absent. The stated limitation below is
+unchanged for a deployment without a key, and softened only in proportion for one with a key.
 
 **Deliverability checks**, meaning RFC 7505 null MX, dangling MX and the no-MX cases. The reasoning
 inverts under this threat model: an account farmer must receive the verification or OTP message, so

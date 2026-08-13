@@ -79,7 +79,7 @@ exactly that. Both cases are reported as missing evidence, which lowers confiden
 
 Every dimension is clamped so none can dominate. Clamps are listed with each dimension.
 
-### Signup capability (clamp -40 to +6) — primary
+### Signup capability (clamp -40 to +7) — primary
 
 | Signal | Points | Flag |
 | --- | --- | --- |
@@ -87,12 +87,40 @@ Every dimension is clamped so none can dominate. Clamps are listed with each dim
 | Free unlimited-alias routing on a custom domain | -21 | `catch_all_capable` |
 | MX at an alias forwarder | -12 | `forwarder` |
 | Submitted domain is a shared alias-relay domain | 0 | `forwarder` |
+| Reputation service calls the domain disposable | -40, plus its risk tier | `disposable` |
+| Reputation service scores risk at 90 or above | -12 | |
+| Reputation service scores risk at 75 to 89 | -6 | |
+| Reputation service answered and knows nothing against the domain | +1 | |
 | MX at a paid business mail tenant | +6 | |
 
 Forwarders are flagged rather than condemned: they are legitimate privacy tools that also happen to be
 ideal for multi-account creation, so the policy decision belongs to the consumer. In `1.2.0` the
 relay-domain row was brought into line with that sentence, which it had been contradicting with a -12
 penalty since `1.0.0`. The flag is unaffected.
+
+The four reputation rows are one signal reading a third-party verdict, and they are the only rows in
+this document never validated against the holdout — the source is metered and excluded from calibration
+by construction, so its numbers are judgement rather than measurement. Three consequences follow from
+pricing its disposable verdict at the same -40 the MX table charges:
+
+- Where the verdict is disposable the dimension floor is already reached, so the risk tier is absorbed
+  and changes nothing. The tiers only decide an outcome where the domain is *not* called disposable.
+- Where this model and the vendor agree, the second verdict costs nothing extra. Two sources reaching
+  one conclusion is corroboration rather than two problems.
+- A free-routing domain the vendor also calls disposable now lands at -40 where it previously sat at
+  -21. That is an unmeasured signal changing the effective reach of a measured one, and it is the
+  clearest cost of this addition.
+
+The `+1` is the single exception to the rule that this model penalises only on positive evidence, and
+the rule holds everywhere else. It exists because the alternative is scoring zero, and a zero renders in
+a collapsed section: a reader would have no way to tell a domain the vendor cleared from one the vendor
+was never asked about. The honest cost is that it lands mainly on domains no feed has caught yet, which
+is the population the model exists to find, and that a domain analysed after the monthly allowance runs
+out scores one point below the same domain analysed the day before. One point cannot move a band, which
+is the entire reason the exception is affordable at this size and would not be at any larger one.
+
+The vendor's `block`, `valid` and `is_email_forwarder` fields are shown as evidence and never scored;
+`docs/SOURCES.md` records which rejected judgement each one would reintroduce.
 
 ### Registration economics (clamp -18 to 0)
 
@@ -353,7 +381,9 @@ Applied after summation, in order:
    and no score. A domain whose mail is handled by consumer mail infrastructure is treated the same
    way, since it is a shared provider vanity domain.
 2. An RDAP registry hold (`serverHold` or `clientHold`) caps `legitimacy` at 10. This is the only hard
-   cap, since with no third-party reputation lookups there is no external verdict to defer to.
+   cap: the registry suspending a domain is the one external verdict the model treats as decisive, and
+   the reputation lookup is deliberately not another — a commercial classifier is a weighted signal, not
+   an authority over the name.
 3. A provider-owned suffix suppresses all registration-age, economics and registrar signals, because
    the age belongs to the provider, and marks the result as scoped to the subdomain.
 
@@ -412,12 +442,21 @@ counting those would report confidence in an age the model does not have.
 | Site | 10 |
 | Pricing | 10 |
 
+The reputation source is deliberately absent from this table. Confidence is coverage of the evidence the
+verdict rests on, and this is the one source that can go dark partway through a month with every other
+upstream healthy, because it is metered. Given a weight, an exhausted allowance would drag every domain
+analysed afterwards toward `insufficient_evidence`, turning a billing event into a verdict about domains
+it says nothing about. Its status is reported in the source panel regardless, and the score already
+reflects exactly what it did or did not contribute.
+
 ## Stated limitation
 
-The tool can never report that a domain is *known* bad, only that it is *structurally* risky. There
-are no third-party reputation lookups, so a domain that is perfectly configured but already burned in
-someone's threat feed will score well here. Consumers holding their own blocklist should treat this
-score as an independent signal to combine with it, not a replacement.
+The tool reports that a domain is *structurally* risky far better than it reports that a domain is
+*known* bad, so a domain that is perfectly configured but already burned in someone's threat feed can
+still score well here. The optional reputation lookup narrows that gap without closing it: it is one
+signal in one dimension, it carries no weight in confidence, and it is absent entirely from a deployment
+without an API key. Consumers holding their own blocklist should treat this score as an independent
+signal to combine with it, not a replacement.
 
 ## Calibration
 
@@ -662,6 +701,42 @@ decide. The audit prints such cases as `KEEP bands disagree` rather than hiding 
 number was consulted first, and three signals currently carry that tier.
 
 ## Changelog
+
+### 1.4.0
+
+Added `signup.checkmail`, one signal reading a third-party reputation verdict from Check-Mail.org. It
+closes the one gap the rest of the model cannot reach by construction: every other signal reads what a
+domain publishes about itself, and a name registered an hour ago by an operator who has already burned a
+thousand others publishes exactly what an innocent new name publishes. It is optional, gated on
+`CHECKMAIL_API_KEY`, and absent from a deployment without one.
+
+This release reverses two stated positions, and both are worth naming rather than quietly amending.
+
+**"No third-party reputation lookups at all"** was narrowed to no third-party reputation *feeds*. The
+rejection had been reasoned about bulk lists, whose staleness and download cost are real and still
+disqualifying; a single point lookup has neither problem. `docs/SOURCES.md` records the full argument.
+
+**"Penalise only on positive evidence"** now has exactly one exception, bounded to a single point: a
+clean reputation answer credits `+1`. The alternative was scoring zero, which renders in a collapsed
+section and leaves a reader unable to tell a domain the vendor cleared from one it was never asked
+about. The cost, stated plainly: the credit lands mainly on domains no feed has caught yet, which is the
+population this model exists to find, and a domain analysed after the monthly allowance is spent scores
+a point below the same domain analysed the day before. One point cannot move a band, and a test pins
+that it never does.
+
+`clamps.signup.max` moved from 6 to 7, so a paid tenant and a clean answer stay additive rather than the
+credit being clamped into invisibility on exactly the domains most likely to earn both. The disposable
+verdict is priced by reading `signup.tempMail` rather than by a number of its own, since it is the same
+claim from a source that checks more than the MX fingerprint. That has one consequence worth watching: a
+`free_routing` domain the vendor also calls disposable now lands at the -40 floor where it previously sat
+at -21, which is an unmeasured signal changing the effective reach of a measured one.
+
+Not measured, and unmeasurable as currently built. The source is metered at 1,000 lookups a month
+against a holdout of several thousand domains, so `lib/analyze.ts` excludes it from every recorded and
+replayed run and the audit reports it as `KEEP no data, source never answered`. Its weights are the only
+ones in the model placed by judgement rather than by a sweep. It also carries no confidence weight, so
+an exhausted allowance cannot move a verdict; and because the credit never fires under replay, reported
+calibration distributions sit one point below what the deployed service emits.
 
 ### 1.3.0
 

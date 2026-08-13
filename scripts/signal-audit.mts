@@ -587,6 +587,14 @@ const SIGNAL_SOURCES: Record<string, string[]> = {
   'signup.free_routing': ['signup'],
   'signup.forwarder': ['signup'],
   'signup.paid_tenant': ['signup'],
+  /*
+   * Never collected, so this reports `KEEP no data, source never answered` and every rate against it
+   * reads zero. That is the correct answer rather than a gap to be filled: the source is metered at a
+   * thousand lookups a month against a holdout of several thousand domains, so `lib/analyze.ts`
+   * excludes it from any recorded or replayed run. Measuring it would cost more than the subscription
+   * and produce a column that was mostly rate-limit failures.
+   */
+  'signup.checkmail': ['checkmail'],
   'economics.first_year_price': ['pricing'],
   'economics.renewal_ratio': ['pricing', 'rdap', 'whois'],
   'economics.unpriced_suffix': ['pricing'],

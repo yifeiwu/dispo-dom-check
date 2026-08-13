@@ -37,6 +37,10 @@ export type Exchange = {
   url: string;
   accept?: string;
   redirect?: string;
+  /** Absent for every GET, which is what keeps transcripts recorded before this existed readable. */
+  method?: string;
+  /** The *request* body, distinct from `body` below, which is what came back. */
+  requestBody?: string;
   elapsedMs: number;
   /** Response body as received, before any parsing. */
   body?: string;
@@ -52,7 +56,7 @@ export type Transcript = {
   exchanges: Exchange[];
 };
 
-type Descriptor = Pick<Exchange, 'call' | 'url' | 'accept' | 'redirect'>;
+type Descriptor = Pick<Exchange, 'call' | 'url' | 'accept' | 'redirect' | 'method' | 'requestBody'>;
 
 type Codec<T> = {
   encode: (value: T) => Partial<Exchange>;
@@ -95,8 +99,19 @@ const registry: Registry = (globals[REGISTRY_KEY] ??= {
 
 const { storage, sharedExchanges } = registry;
 
+/**
+ * Both sides default `method` and `requestBody` identically, so a transcript recorded before those
+ * fields existed still keys to exactly the string a GET produces today.
+ */
 function keyOf(descriptor: Descriptor): string {
-  return [descriptor.call, descriptor.redirect ?? 'follow', descriptor.accept ?? '', descriptor.url].join(' ');
+  return [
+    descriptor.call,
+    descriptor.method ?? 'GET',
+    descriptor.redirect ?? 'follow',
+    descriptor.accept ?? '',
+    descriptor.url,
+    descriptor.requestBody ?? '',
+  ].join(' ');
 }
 
 /** A request the new code makes that the recording never saw. Reported rather than silently fetched. */
@@ -179,6 +194,19 @@ export async function capture<T>(descriptor: Descriptor, codec: Codec<T>, run: (
     target.push({ ...descriptor, elapsedMs: Date.now() - startedAt, error: toRecordedError(error) });
     throw error;
   }
+}
+
+/**
+ * Whether this analysis is being recorded or replayed rather than served.
+ *
+ * Exposed for one purpose: a collector that costs money per call has no business running against a
+ * holdout of several thousand domains, and the metered Check-Mail source reads this to exclude
+ * itself. Gating on the context rather than on an environment variable makes the exclusion a
+ * property of how the analysis was invoked, so a calibration run cannot spend the quota by
+ * forgetting a flag.
+ */
+export function hasRecordingContext(): boolean {
+  return storage.getStore() !== undefined;
 }
 
 /** Runs one analysis, returning its result alongside every response it read. */

@@ -98,7 +98,11 @@ npm run calibrate             # distributions, band edges and error cases, no ne
 ```
 
 Only the first command touches the network, and it is resumable: a re-run probes whatever is not already
-stored, which is what makes it safe to interrupt. The second looks redundant and is not; see "Stored
+stored, which is what makes it safe to interrupt. It does not touch the metered reputation source under
+any flag, and needs no opt-out to avoid it: `lib/analyze.ts` gates that collector on whether a recording
+or replay context is active, so all four commands above are structurally incapable of spending the
+monthly allowance. This is deliberately not an environment variable — the whole point is that a
+collection run cannot burn a month's quota by someone forgetting one. The second looks redundant and is not; see "Stored
 responses" below. Both reports then read the whole holdout with no sampling — the family weighting is what
 stops one operator's several hundred generated names dominating a figure, so there is nothing to cap.
 
@@ -362,7 +366,10 @@ Three results carry most of the design decisions:
   across the whole holdout and not one of the 123 rows labelled `DISPOSABLE`, which is a genuine recall
   gap rather than a sampling artefact now that the group is collected in full. It is left alone rather
   than fitted to the holdout, which would be deriving a fingerprint table from the benchmark and would
-  invalidate every figure it then produced.
+  invalidate every figure it then produced. This is the gap `1.4.0` addressed from the other direction,
+  by adding a third-party verdict as a second route to the same flag. The row above measures only the
+  fingerprint: the reputation source is excluded from collection, so nothing here reflects what the
+  widened flag does in production. See *One signal is unmeasurable by construction* below.
 
 One row is a description rather than an accusation. **No inbound mail scores nothing in either
 direction**, so its 26%-against-2% split moves no domain's number. It reads like a risk signal and is
@@ -393,6 +400,30 @@ The 30 signals and 7 combinations tier as follows:
 | Unmeasured | 2 | 1 | Below the 10-family rarity gate, so no figure means anything yet |
 | Zero by design | 8 | 0 | Reports to the reader and scores nothing |
 | `REMOVE` | 0 | 1 | The rule marks it for removal |
+
+### One signal is unmeasurable by construction
+
+`signup.checkmail` reads a metered third-party API: 1,000 lookups a month against a holdout of several
+thousand domains. `lib/analyze.ts` therefore skips it whenever a recording or replay context is active,
+which means the audit sees it as `KEEP no data, source never answered` and every figure against it reads
+zero. That is the honest result arrived at by the existing rarity rule rather than a special case, but it
+has three consequences a reader of the tables above should carry:
+
+- **Its weights are the only ones in the model never validated here.** Every other number was placed by
+  an ablation or a cross-validated sweep; these were placed by judgement, and `lib/scoring/weights.ts`
+  says so at the block.
+- **Reported distributions sit one point below what the service emits.** The signal credits `+1` for a
+  clean answer, which never fires under replay, so every domain in a calibration run scores a point
+  lower than the same domain would in production. It is not corrected for, because a synthetic
+  correction would be fabricating a verdict the source never gave.
+- **The flag precision table predates the widened `disposable` flag.** From `1.4.0` that flag is raised
+  by either the MX fingerprint or the vendor's disposable verdict, and the figures below were measured
+  when only the first existed. The recall gap noted there — the fingerprint matching none of the 123
+  `DISPOSABLE` rows — is exactly the gap the second route was added to close, so the true rate in
+  production is higher than the 0% recorded, by an amount this holdout cannot measure.
+
+Measuring it properly would mean either a paid tier or a partial run over a stratified subsample, which
+is worth doing before its weights are trusted for anything beyond visibility.
 
 The "zero by design" tier holds the seven credits `1.3.0` withdrew but kept collecting, alongside
 `economics.unpriced_suffix`, which had been its sole occupant and supplied the idiom. `mail.commercial_rua`

@@ -60,9 +60,19 @@ export function narrate(result: ScoreResult, facts: DomainFacts): string {
     sentences.push(`${override.label} applied, which overrode the additive score.`);
   }
 
-  // A source that failed and a source that was deliberately not consulted are different things, and
-  // describing a skipped source as unavailable would misrepresent why it is absent.
-  const reportable = logicalSources(facts.sources);
+  /*
+   * A source that failed and a source that was deliberately not consulted are different things, and
+   * describing a skipped source as unavailable would misrepresent why it is absent.
+   *
+   * The reputation lookup is left out of both sentences below. It carries no confidence weight, so
+   * naming it in a sentence that ends "so confidence is N rather than higher" would state something
+   * untrue: an exhausted monthly allowance moves the confidence figure by exactly nothing. Its status
+   * and its reason are still rendered in the source panel, which is where a reader looks to find out
+   * whether it answered.
+   */
+  const reportable = logicalSources(facts.sources).filter(
+    (source) => source.source !== 'checkmail',
+  );
   const failed = reportable.filter(
     (source) => source.status === 'timeout' || source.status === 'rate_limited' || source.status === 'unavailable',
   );
@@ -102,6 +112,7 @@ const SOURCE_PHRASES: Record<SourceId, string> = {
   signup: 'mail-provider classification',
   pricing: 'suffix pricing',
   site: 'the site probe',
+  checkmail: 'the reputation lookup',
 };
 
 function phrase(signal: { label: string; evidence: string }): string {

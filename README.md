@@ -3,9 +3,12 @@
 Enter a domain or an email address and get an explained assessment of whether the domain looks built to
 mint mailboxes or to run a business.
 
-Every signal is derived from the domain's own registration record, DNS, mail configuration, suffix
-pricing and served content. There are no API keys, no paid feeds and no third-party reputation lookups
-of any kind.
+Almost every signal is derived from the domain's own registration record, DNS, mail configuration,
+suffix pricing and served content, all of it from sources that are free and need no account. The one
+exception is an optional reputation lookup against Check-Mail.org, which takes an API key: with no key
+set it reports as unconfigured, contributes nothing, and every other signal scores exactly as it would
+have. Note that with a key set, each analysed domain is transmitted to that vendor — see
+`docs/SOURCES.md`.
 
 The registration record is read over RDAP wherever a registry answers, and over WHOIS on port 43 wherever
 one does not: either the suffix publishes no RDAP service at all, which is the case for 238 of the root
@@ -191,20 +194,33 @@ considered and removed outright: a teacher registering a class, a family, or a t
 accounts all produce exactly the patterns those heuristics key on, so the false-positive cost lands on
 ordinary people rather than on abusers.
 
+**The reputation lookup sends the domain to a third party.** Nothing else here does: every other source
+is either a committed table or a question put to infrastructure that already knows the domain exists.
+The vendor retains what it is sent and publishes a "recently checked domains" list whose relationship to
+API traffic it does not document, so with a key configured, treat an analysed domain as potentially
+public knowledge. Leaving `CHECKMAIL_API_KEY` unset removes this entirely.
+
 ## Deploying
 
-Deploys to Vercel with no configuration and no environment variables. The analysis route runs on the
-Node runtime with a `maxDuration` of 60 seconds against a 15-second internal budget, so the platform
-never cuts a response that the orchestrator would have degraded gracefully. The route also carries a
-small in-memory rate limit, which is a courtesy brake on the free upstream APIs rather than a security
-control, since serverless instances do not share it.
+Deploys to Vercel with no configuration. One optional environment variable, `CHECKMAIL_API_KEY`, enables
+the reputation lookup; see `.env.example`. The analysis route runs on the Node runtime with a
+`maxDuration` of 60 seconds against a 15-second internal budget, so the platform never cuts a response
+that the orchestrator would have degraded gracefully. The route also carries a small in-memory rate
+limit, which is a courtesy brake on the free upstream APIs rather than a security control, since
+serverless instances do not share it.
+
+Bear in mind that the reputation tier is 1,000 lookups a month and `npm run dev` spends from the same
+allowance as production. Calibration and audit runs never touch it, by construction rather than by
+convention.
 
 ## Stated limitation
 
-Because there are no third-party reputation lookups, this tool can report that a domain is
-*structurally* risky but never that it is *known* bad. A domain that is perfectly configured but already
-burned in someone's threat feed will score well here. Treat the score as an independent signal to
-combine with your own blocklist, not as a replacement for one.
+This tool reports that a domain is *structurally* risky far better than it reports that a domain is
+*known* bad. Every signal but one derives from what the domain itself publishes, so a name that is
+perfectly configured and already burned in someone's threat feed will still score well. The optional
+reputation lookup narrows that gap and does not close it: it is a single signal, it holds no weight in
+confidence, and it is absent entirely without a key. Treat the score as an independent signal to combine
+with your own blocklist, not as a replacement for one.
 
 ## Documentation
 

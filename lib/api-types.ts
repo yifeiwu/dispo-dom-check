@@ -114,6 +114,7 @@ export const SOURCE_LABELS: Record<SourceId, string> = {
   signup: 'Mail provider class',
   pricing: 'Suffix pricing',
   site: 'Site probe',
+  checkmail: 'Reputation (Check-Mail)',
 };
 
 /**
@@ -128,6 +129,7 @@ export const SOURCE_ORDER: SourceId[] = [
   'mail',
   'pricing',
   'site',
+  'checkmail',
   'signup',
 ];
 

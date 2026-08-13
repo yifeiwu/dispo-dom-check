@@ -166,6 +166,41 @@ export type SiteFacts = {
 };
 
 /**
+ * The Check-Mail verdict, which is the one judgement in `DomainFacts` made by somebody else.
+ *
+ * Every other fact here is an observation this system made and can defend. These are conclusions a
+ * commercial vendor reached by means it does not publish, so the fields it offers are kept apart
+ * from the fields the model is willing to score: only `disposable` and `risk` reach a penalty.
+ * `block` and `valid` are recorded because a reader deserves to see the vendor's own headline
+ * answer, and are deliberately never scored — see `lib/scoring/signals.ts`.
+ */
+export type CheckMailFacts = {
+  /** The vendor's disposable-provider verdict. The only boolean the model prices. */
+  disposable: boolean;
+  /** Combined risk score, 0-100. */
+  risk: number;
+  /** The vendor's own recommendation, true when the domain is *either* invalid or disposable. */
+  block: boolean;
+  valid: boolean;
+  /** True where the vendor classes the domain as an alias forwarder. Reported, never scored. */
+  forwarder: boolean;
+  /** Named disposable operator, where the vendor identifies one. */
+  provider?: string;
+  /** The vendor's one-line description, e.g. "Disposable / temporary domain". */
+  text?: string;
+  /** How the verdict was reached, e.g. "Heuristics x5". */
+  reason?: string;
+  /**
+   * The registrable name the vendor actually answered about.
+   *
+   * Kept because it is not always the name that was asked about: a platform-issued name is answered
+   * at its parent, and a verdict about the parent presented as one about the subdomain would be a
+   * penalty attributed to a name that did nothing.
+   */
+  baseDomain?: string;
+};
+
+/**
  * Name-shape observations, computed locally with no network.
  *
  * Only the bulk-registration template survives. Character-histogram measures of the label were built and
@@ -192,6 +227,7 @@ export type DomainFacts = {
   registrarDefault?: RegistrarDefaultFacts;
   pricing?: PricingFacts;
   site?: SiteFacts;
+  checkmail?: CheckMailFacts;
   name: NameFacts;
   /** Per-source status, so the UI can show what the score was and was not based on. */
   sources: SourceStatus[];

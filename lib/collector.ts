@@ -6,6 +6,12 @@
  * reason, and contributes no points in either direction. Missing data may only lower confidence.
  *
  * The corollary, which the whole scoring model depends on: penalise only on positive evidence.
+ *
+ * There is exactly one exception, added in `1.4.0` and bounded to a single point. `signup.checkmail`
+ * credits 1 when the reputation source answers and finds nothing, so that the reader can see a
+ * verdict was obtained rather than inferring it from a missing row. It is a credit for an absence,
+ * which this rule otherwise forbids, and the reason it is tolerable is that one point cannot move a
+ * band. See `docs/SCORING.md`.
  */
 
 export type CollectorStatus =
@@ -16,7 +22,15 @@ export type CollectorStatus =
   | 'unsupported'
   | 'skipped';
 
-export type SourceId = 'rdap' | 'whois' | 'dns' | 'mail' | 'signup' | 'pricing' | 'site';
+export type SourceId =
+  | 'rdap'
+  | 'whois'
+  | 'dns'
+  | 'mail'
+  | 'signup'
+  | 'pricing'
+  | 'site'
+  | 'checkmail';
 
 export type CollectorResult<T> = {
   source: SourceId;
@@ -52,6 +66,14 @@ export const BUDGET = {
    * wave with the site probe: kept under `siteMs`, it adds no wall-clock time to an analysis.
    */
   whoisMs: 3_000,
+  /**
+   * The metered reputation source, held below a normal source deadline.
+   *
+   * It is a commercial API on a monthly request budget rather than a protocol this model depends on,
+   * so it is the source most worth abandoning early: nothing downstream needs it, and it shares its
+   * wave with the longer site probe, so the whole of it is free wall-clock time.
+   */
+  checkmailMs: 2_500,
   /** The last wave, which reads what the others already fetched and so needs very little. */
   signupMs: 1_500,
   /**

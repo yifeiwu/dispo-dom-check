@@ -47,7 +47,7 @@ export async function GET(): Promise<Response> {
         'verdict bands',
       ],
       limitation:
-        'Every signal derives from the domain\'s own configuration, pricing and content. There are no third-party reputation lookups, so this tool can report that a domain is structurally risky but never that it is known bad. Combine it with your own blocklist rather than replacing one.',
+        'Almost every signal derives from the domain\'s own configuration, pricing and content, alongside one optional third-party reputation lookup that holds no weight in confidence and may be absent. This tool reports that a domain is structurally risky far better than it reports that a domain is known bad. Combine it with your own blocklist rather than replacing one.',
     },
     { headers: { 'cache-control': 'public, max-age=300' } },
   );

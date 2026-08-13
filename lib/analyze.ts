@@ -8,7 +8,9 @@ import { collectMail } from './collect/mail';
 import { collectSignup } from './collect/signup';
 import { PRICING_SOURCE_URL, collectPricing } from './collect/pricing';
 import { collectSite } from './collect/site';
+import { collectCheckMail, type CheckMailResult } from './collect/checkmail';
 import { detectRegistrarDefault } from './data/registrar-defaults';
+import { hasRecordingContext } from './record';
 import {
   toSourceStatus,
   type DomainFacts,
@@ -171,8 +173,9 @@ export async function analyze(
   // Taken once so that the collector's own budget and the deadline enforcing it are the same number.
   // Given them separately, the deadline was the smaller of the two and cut the collector off mid-chain.
   const siteMs = siteSource();
+  const checkmailMs = Math.min(BUDGET.checkmailMs, remaining());
 
-  const [whoisResult, mailResult, pricingResult, siteResult] = await Promise.allSettled([
+  const [whoisResult, mailResult, pricingResult, siteResult, checkmailResult] = await Promise.allSettled([
     notify(
       whoisApplies
         ? runCollector(
@@ -210,12 +213,39 @@ export async function analyze(
         siteMs,
       ),
     ),
+    /*
+     * The one metered source, and the only one excluded from a recorded or replayed analysis.
+     *
+     * A calibration collection probes several thousand domains, against a monthly allowance of one
+     * thousand lookups. Running it there would exhaust the budget in a single pass and produce a
+     * holdout whose reputation column is mostly `rate_limited` — worse than having no column, because
+     * it would look measured. Gating on the recording context rather than on a flag means a
+     * calibration run cannot spend the quota by forgetting to opt out.
+     *
+     * Unlike `rdap` and `pricing` this is *not* skipped for a platform-issued name. The vendor answers
+     * about the parent, which for a free-subdomain provider is frequently the most informative thing
+     * available; the scorer names the parent in its evidence so the reader is not misled.
+     */
+    notify(
+      hasRecordingContext()
+        ? skipped<CheckMailResult>(
+            'checkmail',
+            'Metered source, not queried during a recorded or replayed run',
+          )
+        : runCollector(
+            'checkmail',
+            undefined,
+            () => collectCheckMail(input.domain, checkmailMs),
+            checkmailMs,
+          ).then(carryNotice),
+    ),
   ]);
 
   const whois = settled(whoisResult, record);
   const mail = settled(mailResult, record);
   const pricing = settled(pricingResult, record);
   const site = settled(siteResult, record);
+  const checkmail = settled(checkmailResult, record);
 
   // One field regardless of protocol, so every registration signal reads the same shape.
   const registration = (isOk(rdapResult) ? rdapResult.data : undefined)?.facts ?? whois?.facts;
@@ -248,6 +278,7 @@ export async function analyze(
     registrarDefault: detectRegistrarDefault(registration, dns, signup),
     pricing: pricing?.facts,
     site,
+    checkmail: checkmail?.facts,
     name: nameFacts(input.label),
     sources,
   };
@@ -264,14 +295,20 @@ export async function analyze(
 }
 
 /**
- * A registry can answer in full and still publish no registration date, so the collector's notice is
- * carried onto an `ok` status. Without it the panel would read "answered" beside an empty age dimension
- * and leave the reader to work out which of the two was at fault.
+ * Carries a collector's own note onto an `ok` status, for the two sources that can answer fully and
+ * still have something the reader needs told.
+ *
+ * A registry can publish no registration date, and without the note the panel would read "answered"
+ * beside an empty age dimension and leave the reader to work out which of the two was at fault. The
+ * metered reputation source reports how much of its monthly allowance is left, which is only useful
+ * while there is still some.
  *
  * Applied to the promise rather than at the point of recording, so a caller watching sources settle is
  * told the same thing as a caller reading the finished result.
  */
-function carryNotice(result: CollectorResult<WhoisResult>): CollectorResult<WhoisResult> {
+function carryNotice<T extends { notice?: string }>(
+  result: CollectorResult<T>,
+): CollectorResult<T> {
   if (result.status !== 'ok' || !result.data?.notice) return result;
   return { ...result, reason: result.data.notice };
 }

@@ -57,7 +57,7 @@ export type ScoringConfig = Omit<DeepWiden<typeof DEFAULT_CONFIG>, 'verdictBands
 };
 
 export const DEFAULT_CONFIG = {
-  modelVersion: '1.3.0',
+  modelVersion: '1.4.0',
 
   /** Additive evidence starts from a neutral midpoint rather than from zero or from full trust. */
   neutralBase: 50,
@@ -85,9 +85,18 @@ export const DEFAULT_CONFIG = {
    * Leaving them at 14 and 20 would have left two bounds that can never bind, which is the state this
    * comment exists to prevent: a clamp wide enough to look protective over a dimension that can no
    * longer reach it reads as a safety margin while providing none.
+   *
+   * `signup.max` rose from 6 to 7 in 1.4.0 by the same rule read forwards. `paid_tenant` alone reached
+   * the old bound, so the one point `checkmail` credits for a clean reputation answer would have been
+   * clamped away on exactly the domains most likely to earn both, and a credit that silently vanishes
+   * is worse than no credit: the row still renders, showing a point that never reached the total.
+   *
+   * `signup.min` is unchanged and now binds far more often, because `checkmail` prices a disposable
+   * verdict at `tempMail` and the two fire together. That is the intended arithmetic rather than an
+   * oversight — see the note on the reputation block below.
    */
   clamps: {
-    signup: { min: -40, max: 6 },
+    signup: { min: -40, max: 7 },
     economics: { min: -18, max: 0 },
     age: { min: -30, max: 20 },
     mail: { min: -6, max: 4 },
@@ -119,6 +128,52 @@ export const DEFAULT_CONFIG = {
     freeRouting: -21,
     forwarder: -12,
     paidTenant: 6,
+  },
+
+  /**
+   * The third-party reputation verdict, and the only block in this file never measured against the
+   * holdout.
+   *
+   * Every other number here was placed by an ablation or a cross-validated sweep. These cannot be:
+   * the source is metered at a thousand lookups a month against a holdout of several thousand
+   * domains, so it is excluded from collection by construction and the audit reports it as
+   * `KEEP no data, source never answered`. Anyone retuning these is working from judgement, and
+   * should know that rather than assume the usual evidence exists.
+   *
+   * There is deliberately no weight for the disposable verdict. It is the same claim
+   * `signup.temp_mail` makes, from a source that checks more than the MX fingerprint, so the signal
+   * reads `signup.tempMail` directly. Two numbers for one claim would drift apart the first time
+   * either was retuned, and the drift would be invisible: both are in the same dimension, so the
+   * total would still look plausible.
+   *
+   * Pricing it there has a consequence worth stating, because it is easy to miss and impossible to
+   * see from this block alone. At -40 the verdict reaches the `signup` floor on its own, so the risk
+   * tiers below only change an outcome when `is_disposable` is false, and a `free_routing` domain the
+   * vendor also calls disposable now lands at -40 where it previously sat at -21. An unmeasured
+   * signal is therefore changing the effective reach of a measured one.
+   */
+  checkmail: {
+    /** Evaluated in order until one matches. Penalty-only: the bottom tier scores nothing. */
+    riskTiers: [
+      { atLeast: 90, points: -12 },
+      { atLeast: 75, points: -6 },
+      { atLeast: 0, points: 0 },
+    ],
+    /**
+     * What a clean answer is worth, and the single exception to the rule that this model penalises
+     * only on positive evidence.
+     *
+     * It is a credit for an absence, which is the thing 1.3.0 spent a release removing. It exists
+     * because the alternative was scoring zero, and a zero renders in a collapsed section: a reader
+     * would have no way to tell a domain the vendor cleared from one the vendor was never asked
+     * about. The point is the price of putting that distinction in the main list.
+     *
+     * The honest cost, recorded here because it argues against the credit: it lands mainly on domains
+     * no feed has caught yet, which is the population this model exists to find. One point cannot
+     * move a band, and that bound is the entire reason the exception is affordable. It should not
+     * grow.
+     */
+    clean: 1,
   },
 
   economics: {
