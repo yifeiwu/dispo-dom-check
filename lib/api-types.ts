@@ -99,7 +99,6 @@ export const DIMENSION_LABELS: Record<string, string> = {
   age: 'Age and registration',
   mail: 'Mail posture',
   configuration: 'Configuration effort',
-  footprint: 'Organisational footprint',
   site: 'Site existence',
   name: 'Name pattern',
 };

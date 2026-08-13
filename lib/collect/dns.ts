@@ -192,6 +192,21 @@ export async function resolveA(host: string, timeoutMs: number): Promise<string[
   return result.answers.filter((r) => r.type === RR.A).map((r) => r.data);
 }
 
+/**
+ * The mail exchangers published at an arbitrary name, used by the wildcard probe.
+ *
+ * Sorted, because the caller's whole question is whether two different names answer with the *same*
+ * set, and comparing unordered answers would turn a resolver's round-robin into a disagreement.
+ */
+export async function mxAt(name: string, timeoutMs: number): Promise<string[]> {
+  const result = await query(name, 'MX', timeoutMs);
+  return result.answers
+    .filter((r) => r.type === RR.MX)
+    .map((r) => (r.data.split(/\s+/)[1] ?? '').replace(/\.$/, '').toLowerCase())
+    .filter(Boolean)
+    .sort();
+}
+
 /** Fetches a single TXT record set, used for DMARC, DKIM selectors and report authorisation. */
 export async function txtAt(name: string, timeoutMs: number): Promise<string[]> {
   const result = await query(name, 'TXT', timeoutMs);

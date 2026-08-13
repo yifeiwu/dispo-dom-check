@@ -1,4 +1,5 @@
 import type { DomainFacts } from '../facts';
+import { describeVmcFailure } from '../data/bimi-authorities';
 
 /**
  * Facts that are reported beside a verdict and deliberately move no score.
@@ -9,11 +10,21 @@ import type { DomainFacts } from '../facts';
  * come out neutral. Declaring them here instead states the same thing in the type: an observation has
  * evidence and a rationale, and no way to express a score at all.
  *
- * The rule that put them here is unchanged, and it is the one thing to preserve if this list is edited.
- * A credit is paid only where somebody other than the domain confirms it. Every entry below is a string
- * the domain publishes in its own zone, checked against nobody, so all of it is free to mint and an
- * account farmer will mint it at scale. They are still collected and shown because each rides along in
- * a record fetched anyway, and because a reader can weigh what the score will not.
+ * Two different findings can land an entry here, and conflating them would lose the more useful one.
+ *
+ * Most of this list failed the verification rule: a credit is paid only where somebody other than the
+ * domain confirms it, and these are strings the domain publishes in its own zone, checked against
+ * nobody, so all of it is free to mint and an account farmer will mint it at scale. Nothing about that
+ * depends on a measurement, and no future collection can overturn it.
+ *
+ * `footprint.dnssec` is here for the opposite reason and is the only entry that is. It passes the
+ * verification rule outright — the resolver validated the chain to the root, which the domain cannot
+ * assert its way past — and it was demoted in 1.5.0 because it was *measured and found flat*. That is a
+ * statement about this population and a better collection could reverse it, which is exactly why it is
+ * worth keeping the two cases apart.
+ *
+ * What both share is the reason they are still collected and shown: each rides along in a record
+ * fetched anyway, so reporting it costs nothing, and a reader can weigh what the score will not.
  *
  * Absence is never penalised here, exactly as it never was. An observation that does not apply simply
  * does not appear.
@@ -150,6 +161,52 @@ export const OBSERVATIONS: ObservationDefinition[] = [
       if (selectors.length === 0) return null;
       return {
         evidence: `DKIM keys published at ${selectors.length} known selector${selectors.length === 1 ? '' : 's'}`,
+        sourceUrl: sourceUrlFor(facts, 'dns'),
+      };
+    },
+  },
+  {
+    id: 'mail.bimi_unverified',
+    label: 'BIMI record without a verified certificate',
+    rationale:
+      'The domain publishes a BIMI record, which asks mailbox providers to display its logo beside its messages, but the Verified Mark Certificate that is supposed to stand behind it did not verify — it was missing, unreachable, expired, issued to a different domain, or signed by a key no Mark Verifying Authority is known to use. Publishing the record costs nothing and proves nothing; the certificate is the part that requires a registered trademark and about a thousand dollars a year. This is reported rather than penalised because a broken certificate is far more often neglect than deceit, and because a credit paid for the record alone is the exact defect that removed this signal in 1.3.0.',
+    observe(facts) {
+      const bimi = facts.mail?.bimi;
+      if (!bimi?.record || bimi.verified) return null;
+      return {
+        evidence: `The mark could not be verified: ${describeVmcFailure(bimi.failure, bimi.failureDetail)}`,
+        sourceUrl: bimi.certificateUrl,
+      };
+    },
+  },
+  {
+    id: 'site.platform_served',
+    label: 'Response looks like a website platform',
+    rationale:
+      'The page carried the markers of a hosted website platform, but the domain does not resolve into address space that platform publishes for custom domains, so only half of the confirmation is present. Response headers are whatever a server chooses to send and an asset reference in the page can be a site merely linking to a platform rather than living on one, which is the half a domain can arrange by itself. It is reported because it is usually true and costs nothing to notice, and it scores nothing because the part that would make it evidence is missing. Several platforms front their edge with a general-purpose CDN and so can never reach the scored tier at all.',
+    observe(facts) {
+      const platform = facts.site?.platform;
+      if (!platform) return null;
+      // Silent where the signal already paid, or it would report the same fact twice on one domain.
+      if (platform.confirmation === 'served_and_addressed' && platform.paidCustomDomain) return null;
+      const because = platform.paidCustomDomain
+        ? 'the domain does not resolve into its published address space'
+        : 'the platform is also self-hostable, so its markers do not imply a paid account';
+      return {
+        evidence: `${platform.provider} markers present (${platform.matchedOn}), but ${because}`,
+        sourceUrl: facts.site?.finalUrl,
+      };
+    },
+  },
+  {
+    id: 'footprint.dnssec',
+    label: 'DNSSEC validated',
+    rationale:
+      'DNSSEC is fiddly to run and easy to break, so enabling it was read as indicating an operator who cares about correctness, and it earned +3 until 1.5.0. It is the one fact here that never had a verification problem: the resolver validated the chain to the root cryptographically, so this is somebody else\u2019s arithmetic rather than the domain\u2019s own claim. It stopped scoring because it turns out to describe the registrar rather than the registrant. Counted by domain it appears on 16% of the abuse holdout against 6% of the legitimate one, and the suffixes carrying it are the cheap bulk namespaces whose registrars enable it by default — 47% of .cfd and 39% of .id domains are signed, against 4% of .com. It is reported because it is true and costs nothing to observe, and because a reader may weigh it differently once they know whose decision it was.',
+    observe(facts) {
+      if (!facts.dns?.dnssecValidated) return null;
+      return {
+        evidence: 'The resolver validated this zone with DNSSEC',
         sourceUrl: sourceUrlFor(facts, 'dns'),
       };
     },

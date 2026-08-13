@@ -9,16 +9,24 @@ import {
   checkMailBlocksForRejectedReasons,
   checkMailClean,
   checkMailFlagsUnknownMx,
+  disposableTokenDomain,
   establishedSmallBusiness,
   farmProfileDomain,
+  hostedPlatformDomain,
+  inZoneTempMailDomain,
   forwarderDomain,
   modestNewBusiness,
   nothingObserved,
   parkedWithMail,
+  platformServedOnlyDomain,
+  probedNoWildcardDomain,
   providerSubdomain,
   registrarDefaultFarm,
   selfAssertedRecords,
   tempMailDomain,
+  unverifiedBimiDomain,
+  verifiedBimiDomain,
+  wildcardMxDomain,
   withCheckMail,
 } from './fixtures';
 
@@ -69,9 +77,9 @@ describe('absence is never a penalty', () => {
     expect(penalties).toHaveLength(0);
   });
 
-  it('reports the absent heuristic as inapplicable rather than as scoring zero', () => {
+  it('reports an absent heuristic as inapplicable rather than as scoring zero', () => {
     const result = score(absences);
-    expect(result.inapplicableSignals.map((signal) => signal.id)).toContain('footprint.dnssec');
+    expect(result.inapplicableSignals.map((signal) => signal.id)).toContain('site.no_address_when_young');
   });
 
   it('says nothing at all about the absent observations', () => {
@@ -79,6 +87,7 @@ describe('absence is never a penalty', () => {
     const reported = result.observations.map((observation) => observation.id);
     expect(reported).not.toContain('mail.dmarc_policy');
     expect(reported).not.toContain('footprint.saas_vendors');
+    expect(reported).not.toContain('footprint.dnssec');
   });
 
   it('discounts correlated absences instead of accumulating them', () => {
@@ -388,6 +397,89 @@ describe('removed signals stay removed', () => {
     const reputation = score(domain).signals.find((signal) => signal.id === 'signup.checkmail');
     expect(reputation?.points).toBe(DEFAULT_CONFIG.checkmail.clean);
   });
+
+  /*
+   * The DNSSEC credit is the one removal here that was never about verifiability, so it is the one most
+   * likely to be argued back in on its reasoning — which was always sound, and was never the problem.
+   * It paid +3 on 5% of abuse families and 6% of legitimate ones. What must stay true is that a
+   * validated zone is still reported and still scores nothing, since the fact is free to collect and
+   * only the credit was withdrawn.
+   */
+  it('reports a validated DNSSEC chain without paying for it', () => {
+    const signed = establishedSmallBusiness();
+    signed.dns = { ...signed.dns!, dnssecValidated: true };
+    const unsigned = establishedSmallBusiness();
+    unsigned.dns = { ...unsigned.dns!, dnssecValidated: false };
+
+    expect(SIGNALS.map((signal) => signal.id)).not.toContain('footprint.dnssec');
+    expect(score(signed).observations.map((entry) => entry.id)).toContain('footprint.dnssec');
+    expect(score(signed).legitimacy).toBe(score(unsigned).legitimacy);
+  });
+
+  /*
+   * The wildcard conjunction shipped at zero for one release and was removed rather than left as a
+   * registry entry that fires on 1% of abuse domains to say nothing. Youth and an absent site are
+   * already charged elsewhere, which is why it never earned a weight; a reinstatement would be paying
+   * for them a third time.
+   */
+  it('does not charge a second time for youth and no site beside a wildcard MX', () => {
+    const result = score(wildcardMxDomain());
+    expect(result.combinations.map((combo) => combo.id)).not.toContain(
+      'combo.wildcard_mx_young_no_site',
+    );
+  });
+
+  /*
+   * The defect the 1.3.0 removal was about, and the one a future change is likeliest to reintroduce.
+   * `mail.bimi` paid +8 for a record beginning with `v=BIMI1` while never fetching the certificate it
+   * points at. The record is back and so is the signal, so what has to stay true is that a record whose
+   * certificate did not verify — for any reason, including there being none — is worth exactly nothing.
+   */
+  it('pays nothing for a BIMI record whose certificate did not verify', () => {
+    for (const failure of ['no_certificate', 'expired', 'subject_mismatch', 'untrusted_anchor']) {
+      const result = score(unverifiedBimiDomain(failure));
+      const bimi = result.signals.find((signal) => signal.id === 'mail.bimi');
+      expect(bimi?.points, failure).toBe(0);
+      expect(result.legitimacy, failure).toBe(score(establishedSmallBusiness()).legitimacy);
+
+      // Charging nothing is only half of it: a reader is owed the reason, in words rather than in the
+      // identifier the code uses to branch on.
+      expect(bimi?.evidence, failure).not.toMatch(/_/);
+      expect(result.observations.find((entry) => entry.id === 'mail.bimi_unverified')?.evidence, failure)
+        .not.toMatch(/_/);
+    }
+  });
+
+  /*
+   * A verified certificate is the strongest single fact the model can collect and still scores nothing,
+   * because the holdout contained one of them. This pins the weight to the measurement rather than to
+   * the reasoning, which is the whole disagreement that removed it the first time.
+   */
+  it('reports a verified Verified Mark Certificate without paying for it', () => {
+    const result = score(verifiedBimiDomain());
+    const bimi = result.signals.find((signal) => signal.id === 'mail.bimi');
+    expect(bimi?.points).toBe(0);
+    expect(bimi?.evidence).toMatch(/DigiCert/);
+    expect(result.legitimacy).toBe(score(establishedSmallBusiness()).legitimacy);
+  });
+
+  /*
+   * The hosted-service credit was removed in 1.2.0 for classifying an apex CNAME, which is a record the
+   * domain writes about itself. A response header is the same kind of claim — a server sends whatever it
+   * likes — so the served-only tier must never score, whatever the addressed tier is eventually worth.
+   */
+  it('pays nothing for a platform that only appears to be serving the domain', () => {
+    const result = score(platformServedOnlyDomain());
+    expect(result.signals.find((signal) => signal.id === 'site.hosted_platform')).toBeUndefined();
+    expect(result.observations.map((entry) => entry.id)).toContain('site.platform_served');
+    expect(result.legitimacy).toBe(score(establishedSmallBusiness()).legitimacy);
+  });
+
+  it('reports a confirmed hosted platform without paying for it', () => {
+    const result = score(hostedPlatformDomain());
+    expect(result.signals.find((signal) => signal.id === 'site.hosted_platform')?.points).toBe(0);
+    expect(result.legitimacy).toBe(score(establishedSmallBusiness()).legitimacy);
+  });
 });
 
 /**
@@ -558,6 +650,67 @@ describe('explainability', () => {
         expect(signalIds.has(required), `${combination.id} requires unknown ${required}`).toBe(true);
       }
     }
+  });
+});
+
+/**
+ * The recall gap `docs/CALIBRATION.md` records, and the three observations added to close it.
+ *
+ * The gap is structural rather than a short table: a throwaway-inbox service selling custom domains
+ * tells the customer to publish a mail exchanger inside their own zone, so the hostname reveals nothing
+ * and no amount of lengthening the provider list would help. Each assertion below pins one of the three
+ * routes that do reach it, and the first pins the outcome the whole exercise is for.
+ */
+describe('disposable capability reached without a provider hostname', () => {
+  it('reaches the disposable verdict on a domain whose mail exchanger names its own zone', () => {
+    const result = score(inZoneTempMailDomain());
+    expect(result.flags).toContain('disposable');
+    expect(result.verdict).toBe('high_risk');
+  });
+
+  it('names the address rather than the hostname as the reason, since the hostname proves nothing', () => {
+    const fired = score(inZoneTempMailDomain()).signals;
+    const signal = fired.find((entry) => entry.id === 'signup.temp_mail_endpoint');
+    expect(signal?.evidence).toContain('46.62.148.222');
+    // The hostname signal must stand aside, or one domain pays the same claim twice.
+    expect(fired.map((entry) => entry.id)).not.toContain('signup.temp_mail');
+  });
+
+  it('reaches the disposable verdict from an ownership token alone', () => {
+    const result = score(disposableTokenDomain());
+    expect(result.flags).toContain('disposable');
+    expect(result.signals.map((signal) => signal.id)).toContain('signup.disposable_token');
+  });
+
+  it('prices both disposable routes off the same weight rather than a second number', () => {
+    const softened = { ...DEFAULT_CONFIG, signup: { ...DEFAULT_CONFIG.signup, tempMail: -5 } };
+    for (const id of ['signup.temp_mail_endpoint', 'signup.disposable_token']) {
+      expect(SIGNALS.find((entry) => entry.id === id)!.weight(softened), id).toEqual({
+        min: -5,
+        max: -5,
+      });
+    }
+  });
+
+  it('reports a wildcard zone as catch-all capable and names what it means', () => {
+    const result = score(wildcardMxDomain());
+    expect(result.flags).toContain('catch_all_capable');
+    const signal = result.signals.find((entry) => entry.id === 'signup.wildcard_mx');
+    expect(signal?.evidence).toContain('mx.example.com');
+  });
+
+  it('credits nothing for a zone probed and found not to wildcard', () => {
+    const result = score(probedNoWildcardDomain());
+    expect(result.signals.map((signal) => signal.id)).not.toContain('signup.wildcard_mx');
+    expect(result.flags).not.toContain('catch_all_capable');
+    // Not having a capability is the ordinary case, so it must not read as evidence of legitimacy.
+    expect(result.legitimacy).toBeGreaterThanOrEqual(score(wildcardMxDomain()).legitimacy);
+  });
+
+  it('says nothing at all when the zone could not be probed', () => {
+    const unprobed = wildcardMxDomain();
+    unprobed.signup = { ...unprobed.signup!, wildcardMx: undefined };
+    expect(score(unprobed).legitimacy).toBe(score(probedNoWildcardDomain()).legitimacy);
   });
 });
 

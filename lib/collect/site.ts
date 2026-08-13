@@ -2,6 +2,7 @@ import { BUDGET } from '../collector';
 import { probe } from '../fetch';
 import { PARKING_BODY_FINGERPRINTS, PARKING_NAMESERVERS } from '../data/parking-ns';
 import { classifyRedirectTarget } from '../data/redirect-targets';
+import { detectPlatform } from '../data/site-platforms';
 import type { DnsFacts, SiteFacts } from '../facts';
 
 /**
@@ -122,6 +123,32 @@ export async function collectSite(
   // indistinguishable from a real one by size alone.
   const okStatus = root.status >= 200 && root.status < 300;
 
+  /*
+   * Read from the response already in hand and the addresses already resolved, so this adds no request.
+   *
+   * That is the whole reason it can exist at all. The credit this feeds was removed in 1.2.0 along with
+   * the apex CNAME lookup that fed it, on the rule that a fingerprint table nobody reads is not worth a
+   * round trip. Reinstating it as a lookup would run into the same rule; reinstating it as a read of
+   * bytes already fetched does not.
+   *
+   * Only the domain's own response is examined. A redirect off the domain is somebody else's page, and
+   * attributing their platform to this domain is exactly the error `redirectedOffDomain` exists to stop.
+   *
+   * A parked page is excluded for a sharper reason, found by measuring this against the stored
+   * transcripts. Squarespace is a registrar as well as a site builder, and a domain registered through
+   * it with no site attached is served Squarespace's parking page, from Squarespace's own address
+   * space, carrying Squarespace's own `x-contextid` header. That satisfies every test the addressed
+   * tier applies while being the exact opposite of what the tier is meant to establish — four abuse
+   * domains in the holdout are in that state and one of them reached the tier. Where a platform is both
+   * the registrar and the host, serving the domain proves nothing about a purchase; refusing to read a
+   * parked page as evidence of a paid site is what closes it.
+   */
+  const parked = Boolean(parkingNs.length > 0 || bodyParking || redirectParking);
+  const platform =
+    redirectedOffDomain || parked
+      ? undefined
+      : (detectPlatform(Object.fromEntries(root.headers), root.body, dns?.a ?? []) ?? undefined);
+
   return {
     reachable: true,
     status: root.status,
@@ -132,7 +159,7 @@ export async function collectSite(
     contentLength: text.length,
     substantive:
       !redirectedOffDomain && okStatus && text.length >= SUBSTANTIVE_TEXT_THRESHOLD && Boolean(title),
-    parked: parkingNs.length > 0 || Boolean(bodyParking) || redirectParking,
+    parked,
     parkingEvidence: parkingNs[0]
       ? `Delegated to ${parkingNs[0].provider} parking nameservers`
       : bodyParking
@@ -146,6 +173,7 @@ export async function collectSite(
         label.length >= 3 &&
         title.toLowerCase().replace(/[^a-z0-9]/g, '').includes(label.replace(/[^a-z0-9]/g, '')),
     ),
+    platform,
   };
 }
 

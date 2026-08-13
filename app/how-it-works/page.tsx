@@ -25,11 +25,19 @@ const magnitude = (weight: WeightRange): number =>
   Math.max(Math.abs(weight.min), Math.abs(weight.max));
 
 /**
- * What a heuristic is worth. Every signal in the registry moves a score, so there is no zero case to
- * annotate here: the facts that are collected and never priced are observations, listed separately
- * below, and they carry no weight to describe.
+ * What a heuristic is worth.
+ *
+ * A heuristic held at zero is a third thing, distinct both from one that moves the score and from an
+ * observation. An observation has no weight to set; these have one, and it was deliberately set to
+ * nothing because the holdout was too thin to price them — `+0` on its own would read as an oversight
+ * or a rounding, so it is spelled out instead. They are still listed here rather than hidden, because
+ * their rationale is the argument for collecting the fact at all, and a reader deciding whether to
+ * trust the model should be able to see what it declines to charge for.
  */
 function describeWeight(weight: WeightRange): string {
+  if (weight.min === 0 && weight.max === 0) {
+    return weight.note ? `no points · ${weight.note}` : 'no points · reported, deliberately not priced';
+  }
   const range =
     weight.min === weight.max ? signed(weight.min) : `${signed(weight.min)} to ${signed(weight.max)}`;
   return weight.note ? `${range} · ${weight.note}` : range;
@@ -117,10 +125,10 @@ export default function HowItWorks() {
       <section className="space-y-3">
         <h3 className="text-base font-semibold">Dimensions and their limits</h3>
         <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
-          Every dimension is clamped, so no single one can carry a verdict alone. The primary dimension
-          has the widest negative range because a throwaway-inbox fingerprint genuinely is close to
-          conclusive, while organisational footprint is positive-only: having none of those records is the
-          normal condition of a small business rather than evidence of anything.
+          Every dimension is clamped, so no single one can carry a verdict alone. Signup capability has
+          the widest negative range because a throwaway-inbox fingerprint genuinely is close to
+          conclusive, while registration economics is negative-only: a cheap suffix is worth noting and
+          an expensive one buys nothing, since anyone willing to spend can.
         </p>
         <ul className="divide-y divide-edge text-sm">
           {dimensions.map((dimension) => (
@@ -169,12 +177,15 @@ export default function HowItWorks() {
         <h3 className="text-base font-semibold">Collected, reported, never scored</h3>
         <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
           These are not heuristics with a weight of zero. They carry no weight at all, and there is no
-          number to set: an observation can only report what was seen. Most are records the domain
-          publishes about itself, which nothing can confirm and anyone can write, so paying for them
-          would price what an operator was willing to type. The rest are facts whose two explanations
-          point in opposite directions, such as a suffix the reference price list does not carry, where
-          saying so is better than guessing either way. They are shown beside every verdict because a
-          reader can weigh what the score will not, and their absence is never a penalty.
+          number to set: an observation can only report what was seen. Three different findings land a
+          fact here. Most are records the domain publishes about itself, which nothing can confirm and
+          anyone can write, so paying for them would price what an operator was willing to type. Some
+          are facts whose two explanations point in opposite directions, such as a suffix the reference
+          price list does not carry, where saying so is better than guessing either way. And one, a
+          validated DNSSEC chain, is corroborated perfectly well and stopped scoring for the opposite
+          reason: it was measured against the holdout and found to describe which registrar was used
+          rather than who was using it. They are shown beside every verdict because a reader can weigh
+          what the score will not, and their absence is never a penalty.
         </p>
         <ul className="space-y-3 rounded-lg border border-edge bg-surface-raised p-4">
           {OBSERVATIONS.map((observation) => (
@@ -219,10 +230,15 @@ export default function HowItWorks() {
         <h3 className="text-base font-semibold">What this deliberately does not do</h3>
         <ul className="max-w-3xl space-y-2 text-sm leading-relaxed text-ink-muted">
           <li>
-            <span className="font-medium text-ink">No reputation lookups. </span>
-            Every signal comes from the domain&rsquo;s own configuration, pricing and content, so the model
-            generalises to a domain registered minutes ago that no feed has seen. The cost is that it can
-            never report a domain as known bad, only as structurally risky.
+            <span className="font-medium text-ink">Nothing is scored on a third party&rsquo;s opinion. </span>
+            No blocklist is consulted and no feed is asked whether a domain is bad, so the model
+            generalises to a domain registered minutes ago that nobody has seen. The cost is that it can
+            never report a domain as known bad, only as structurally risky. What a third party had to{' '}
+            <em>agree</em> to is the opposite case, and the evidence the model most prefers: a mail vendor
+            publishing the record that authorises this domain to report to it, or a certificate authority
+            issuing a mark certificate against a registered trademark. Those are facts somebody else
+            established, not judgements somebody else made, and each is checked rather than taken on
+            trust.
           </li>
           <li>
             <span className="font-medium text-ink">No deliverability checks. </span>
@@ -243,7 +259,10 @@ export default function HowItWorks() {
           <li>
             <span className="font-medium text-ink">No hosting reputation. </span>
             A farm domain often has no website at all, and shared reseller hosting in a recently allocated
-            prefix is how a great many legitimate small businesses are hosted.
+            prefix is how a great many legitimate small businesses are hosted. Noticing that a named
+            website platform is serving a domain from its own address space is a different claim, and an
+            allowed one: it says a platform routes this name, which platforms do for paying accounts. The
+            claim being avoided is that an address range is disreputable.
           </li>
         </ul>
       </section>

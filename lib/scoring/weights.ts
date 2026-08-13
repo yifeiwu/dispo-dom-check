@@ -16,7 +16,6 @@ export type Dimension =
   | 'age'
   | 'mail'
   | 'configuration'
-  | 'footprint'
   | 'site'
   | 'name';
 
@@ -57,7 +56,7 @@ export type ScoringConfig = Omit<DeepWiden<typeof DEFAULT_CONFIG>, 'verdictBands
 };
 
 export const DEFAULT_CONFIG = {
-  modelVersion: '1.4.0',
+  modelVersion: '1.6.0',
 
   /** Additive evidence starts from a neutral midpoint rather than from zero or from full trust. */
   neutralBase: 50,
@@ -101,7 +100,6 @@ export const DEFAULT_CONFIG = {
     age: { min: -30, max: 20 },
     mail: { min: -6, max: 4 },
     configuration: { min: -10, max: 10 },
-    footprint: { min: 0, max: 3 },
     site: { min: -12, max: 6 },
     name: { min: -5, max: 15 },
   } satisfies Record<Dimension, { min: number; max: number }>,
@@ -128,6 +126,35 @@ export const DEFAULT_CONFIG = {
     freeRouting: -21,
     forwarder: -12,
     paidTenant: 6,
+    /**
+     * A zone that answers with mail exchangers for names nobody created.
+     *
+     * This is the only weight in the dimension that prices the capability directly rather than
+     * inferring it from who runs the mailbox: a wildcard MX means one registration yields an unbounded
+     * supply of deliverable addresses, which is the thing the dimension is named for. It is a separate
+     * weight rather than a reading of `tempMail` because it is a separate claim — a legitimate operator
+     * can wildcard a zone, and several do.
+     *
+     * Placed at -12 by a 5-fold sweep stratified over families, entered at zero so that every candidate
+     * was judged against shipping nothing rather than defending a number chosen first. All five folds
+     * picked it, out of sample it admits no further legitimate domain to an actionable band, and it
+     * recovers rather more than one abuse family per fold from a legitimate one. That is a small effect
+     * honestly reported: the capability appears on about 4% of the population, so it decides few
+     * verdicts, and it is kept because the ones it decides cost nothing.
+     *
+     * The innocent reading was expected to force most of the weight into a youth-and-no-site
+     * conjunction, on the pattern `freeRouting` established. The measurement said otherwise: that
+     * conjunction was swept over the same folds, stayed at zero in all five, and was removed in the
+     * same release it arrived in. See `lib/scoring/combinations.ts`.
+     *
+     * There is deliberately no weight for the two disposable-equivalent signals beside it. An MX
+     * resolving to a published throwaway-inbox endpoint and an ownership token for one of those
+     * services in the apex TXT set are both the claim `signup.temp_mail` already makes, reached by a
+     * different observation, so both read `tempMail` directly. The reasoning is the one set out for the
+     * reputation verdict below: two numbers for one claim drift apart the first time either is
+     * retuned, and the drift is invisible because they share a dimension.
+     */
+    wildcardMx: -12,
   },
 
   /**
@@ -218,10 +245,10 @@ export const DEFAULT_CONFIG = {
    * showing beside a verdict and ride along in records fetched anyway, so they are collected as
    * observations, which carry no weight to tune. See `lib/scoring/observations.ts`.
    *
-   * A seventh, `bimi`, was deleted outright. It was the plainest case of the same defect — its rationale
-   * priced a Verified Mark Certificate at +8 while the collector only ever checked that the record began
-   * with `v=BIMI1` — and unlike the others it cost a DNS query of its own, so nothing was left behind to
-   * report. See `lib/collect/mail.ts`.
+   * A seventh, `bimi`, was deleted outright in 1.3.0. It was the plainest case of the same defect — its
+   * rationale priced a Verified Mark Certificate at +8 while the collector only ever checked that the
+   * record began with `v=BIMI1` — and unlike the others it cost a DNS query of its own. It is back in
+   * 1.6.0 with the certificate actually fetched and verified, at zero; see below.
    *
    * `commercialRua` survives at full weight because RFC 7489 §7.1 makes it verifiable: an external
    * report destination must authorise the domain by publishing a record in the vendor's own zone, so
@@ -229,6 +256,24 @@ export const DEFAULT_CONFIG = {
    */
   mail: {
     commercialRua: 4,
+    /**
+     * Zero, and for a reason worth separating from the other zeroes in this file. Nothing is wrong with
+     * the signal. A verified VMC is the strongest single piece of evidence the model can collect — a
+     * registered trademark, proof of control, and about a thousand dollars a year, none of it
+     * assertable — and the verification now actually happens.
+     *
+     * There is simply nothing here to price it with. A census of all 4,698 holdout domains, one TXT
+     * query each, found **5 BIMI records, of which exactly 1 pointed at a certificate**: Namecheap.
+     * Three of the remaining four are Proton domains and so are one family, and the fifth is an abuse
+     * domain publishing a record with no certificate — which is, precisely, the shape the removed
+     * signal used to pay for. One domain cannot support a weight; the ten-family rarity gate exists to
+     * stop exactly this.
+     *
+     * A weight fitted here would be fitted to Namecheap. So it ships at zero and is reported as an
+     * observation, and the number that would price it has to come from a population that publishes
+     * some — which a holdout that is 94% generated abuse domains was never going to be.
+     */
+    bimi: 0,
     /** The only negatives are affirmative misconfigurations, never absence. */
     spfPermitAll: -4,
     liveSiteWithoutSpf: -3,
@@ -242,30 +287,58 @@ export const DEFAULT_CONFIG = {
     titleMatchesDomain: 4,
   },
 
-  /**
-   * Organisational footprint, reduced in 1.3.0 to the one member of it that is not self-asserted.
+  /*
+   * There is no organisational-footprint block any more, and no dimension either.
    *
-   * The dimension was built on the premise that a verification record is "the residue of someone
-   * completing a domain-verification step inside a paid product". The residue is indistinguishable
+   * It was built on the premise that a verification record is "the residue of someone completing a
+   * domain-verification step inside a paid product". The residue turned out to be indistinguishable
    * from the thing itself: the vendor census matches a TXT prefix, no vendor offers any way to confirm
    * a token it issued, and five invented strings earned the top tier. DKIM keys are free to generate.
-   * Both are still reported, since the records they read arrive with work being done anyway, but as
-   * observations rather than as weights of zero. See `lib/scoring/observations.ts`.
+   * Both were demoted to observations in 1.3.0, and the business-service tiers were deleted outright
+   * along with the six DNS queries per analysis that fed them.
    *
-   * The business-service tiers were deleted rather than zeroed, because they had the same defect in a
-   * worse form — a `_caldav._tcp` or `_sip._tls` record was credited for pointing anywhere at all — and
-   * six dedicated DNS queries per analysis existed to feed them. See `lib/collect/dns.ts`.
+   * `dnssec: 3` was the last member and survived those removals, because the objection that took the
+   * others does not touch it: the resolver validated the chain to the root, so it is somebody else's
+   * arithmetic and cannot be asserted away. 1.5.0 removed it on a measurement instead. It fired on 5%
+   * of abuse families and 6% of legitimate ones with a lift interval spanning 1.00, and taking it out
+   * left AUC unchanged while removing two abuse domains from a legitimate band. A credit that pays
+   * both classes at the same rate is not a credit, whatever its reasoning says.
    *
-   * DNSSEC is what is left and the reason the dimension still exists: the resolver validated the chain
-   * cryptographically, so the AD flag is somebody else's arithmetic rather than the domain's own claim.
-   * It is cheap to enable, which is why it is worth little, but it cannot be asserted.
+   * Per domain rather than per family it is worse than flat: 16% of abuse names against 6% of
+   * legitimate. The cheap bulk namespaces carry it — `.cfd` at 47% and `.id` at 39% of 1,548 domains,
+   * against 4% for `.com` — because their registrars enable DNSSEC by default. Enabling it stopped
+   * being a decision the registrant makes, so the price was being paid for a checkbox somebody else
+   * ticked. That is the general hazard with any credit for a capability: it holds only for as long as
+   * the capability costs the registrant something.
+   *
+   * The dimension went with it rather than being left empty, on the rule stated at the clamps above: a
+   * bound over a dimension that cannot reach it reads as protection while providing none, and a
+   * dimension with no signals is the same defect one level up — it sums to zero on every domain and
+   * renders as a row that always says nothing.
    */
-  footprint: {
-    dnssec: 3,
-  },
 
   site: {
     substantiveContent: 6,
+    /**
+     * Zero, chosen by the sweep in 5 of 5 folds, and two independent findings say the same thing.
+     *
+     * The scored tier fires on **6 domains of 4,698, all legitimate and no abuse**. Nothing is wrong
+     * with the precision; there is simply not enough of it to price. Six families is below the
+     * ten-family rarity gate the audit applies to every signal, and a weight fitted to six domains is
+     * fitted to those six domains.
+     *
+     * It would also be invisible if placed. Every one of the six serves a real website — necessarily,
+     * since a platform is serving it — so `substantiveContent` at +6 has already reached the +6
+     * `clamps.site.max` before this is added, and every point of it is clamped away. Raising the clamp
+     * to make room was rejected: the two credits are one fact seen twice, that somebody built and pays
+     * for a site, and widening a bound to charge twice for it is what the bound is for.
+     *
+     * So the entry ships at zero rather than being deleted, on the `signup.max` precedent above: the
+     * collection costs nothing, the fact is reported as an observation, and a later collection with
+     * more small-business domains can price it without rebuilding anything. What it must not do is
+     * carry a number nothing supports.
+     */
+    hostedPlatform: 0,
     parked: -12,
     noAddressWhenYoung: { underDays: 30, points: -6 },
   },
@@ -280,6 +353,11 @@ export const DEFAULT_CONFIG = {
     totalCap: 40,
     farmProfile: -25,
     freeRoutingYoungNoSite: { maxAgeDays: 90, points: -15 },
+    /*
+     * There is no `wildcardMxYoungNoSite` key. It existed for one release at zero points and was
+     * removed with the conjunction it priced; `lib/scoring/combinations.ts` carries the measurement and
+     * the reason.
+     */
     inboundWithoutOutbound: -10,
     parkedWithMx: -8,
     registrarDefaultProfile: { maxAgeDays: 90, points: -8 },

@@ -1,8 +1,11 @@
 import { txtAt, txtAtFollowingCname } from './dns';
+import { fetchText } from '../fetch';
+import { parseBimiRecord, verifyVmc } from '../bimi-vmc';
 import {
   COMMERCIAL_DMARC_VENDORS,
   PAID_SPF_SENDERS,
   countSaasVendors,
+  matchDisposableVerification,
 } from '../data/saas-verification-vendors';
 import type { DnsFacts, MailFacts } from '../facts';
 import { classifyDkimProvider } from '../data/dns-services';
@@ -14,9 +17,13 @@ import { classifyDkimProvider } from '../data/dns-services';
  * turned out to measure nothing an operator could not type in a minute. Strict alignment, an explicit
  * subdomain policy and a named sending platform were all read as evidence of investment and all cost
  * nothing whatsoever to assert. They are still collected, because they ride along in a record already
- * being fetched and a reader wants to see them, and they no longer score. What does not ride along is no
- * longer fetched: the BIMI record had a query of its own and lost it with its credit. See
- * `docs/SCORING.md`.
+ * being fetched and a reader wants to see them, and they no longer score. See `docs/SCORING.md`.
+ *
+ * BIMI is the exception that had a query of its own, lost it in 1.3.0 with its credit, and got it back
+ * in 1.6.0 on different terms: the certificate is now fetched and verified rather than the record being
+ * taken at its word, and the lookup only happens behind the enforcing DMARC policy the BIMI
+ * specification requires. It still scores nothing, for want of a population publishing enough of it to
+ * price. See `collectBimi` below.
  *
  * One part survives as evidence: the reporting vendor, because RFC 7489 §7.1 makes an external report
  * destination authorise the domain in its own zone, and only the vendor can publish that.
@@ -53,19 +60,6 @@ export async function collectMail(
   const per = Math.max(1200, Math.floor(timeoutMs / 2));
   const apexTxt = dns?.txt ?? [];
 
-  /*
-   * There is deliberately no BIMI lookup here any more.
-   *
-   * It cost a TXT query at `default._bimi` on every analysis to establish that a record began with
-   * `v=BIMI1`. The +8 that paid for was withdrawn in 1.3.0, because the record is a pointer and the
-   * Verified Mark Certificate it points at was never fetched, so the credit priced a purchase and
-   * measured a string. Confirming it properly means retrieving the certificate and checking its issuer,
-   * which is a second network request for a record that appeared on 2 of 4,691 holdout domains.
-   *
-   * The query went with the credit rather than being left to collect a fact nothing weighs. Reporting a
-   * record the model is indifferent to is not worth a round trip on every analysis, and the same
-   * reasoning retired the `robots.txt` probe in `lib/collect/site.ts`.
-   */
   const [dmarcRecords, dkimKeys] = await Promise.all([
     txtAt(`_dmarc.${domain}`, per).catch(() => [] as string[]),
     probeDkimSelectors(domain, per),
@@ -87,7 +81,11 @@ export async function collectMail(
   const commercialVendor = COMMERCIAL_DMARC_VENDORS.find((vendor) =>
     rua.some((address) => address.toLowerCase().includes(vendor)),
   );
-  const ruaVerified = await verifyReportingVendor(domain, rua, commercialVendor, per);
+  const dmarcPolicy = normalisePolicy(dmarcTags.p);
+  const [ruaVerified, bimi] = await Promise.all([
+    verifyReportingVendor(domain, rua, commercialVendor, per),
+    collectBimi(domain, dmarcPolicy, per),
+  ]);
 
   return {
     spf,
@@ -101,7 +99,7 @@ export async function collectMail(
       ),
     ],
     dmarc,
-    dmarcPolicy: normalisePolicy(dmarcTags.p),
+    dmarcPolicy,
     dmarcSubdomainPolicy: dmarcTags.sp,
     dmarcStrictAlignment: dmarcTags.aspf === 's' || dmarcTags.adkim === 's',
     dmarcRua: rua,
@@ -110,6 +108,91 @@ export async function collectMail(
     dkimSelectors: dkimKeys.map(({ selector }) => selector),
     dkimKeys,
     saasVendors: countSaasVendors(apexTxt),
+    // Read out of the same already-fetched record set as the line above, so this costs no query.
+    disposableVerification: matchDisposableVerification(apexTxt),
+    bimi,
+  };
+}
+
+/**
+ * BIMI, checked to the certificate rather than to the record.
+ *
+ * The 1.3.0 removal was right about the old signal and wrong about the fact. `mail.bimi` paid +8 for a
+ * TXT record beginning with `v=BIMI1`, which is a string anyone can publish, and it never fetched the
+ * Verified Mark Certificate the record points at. That certificate is the whole of what makes BIMI
+ * interesting: it requires a registered trademark, proof of control over it, and roughly a thousand
+ * dollars a year, none of which is inherited by publishing a pointer to nothing.
+ *
+ * **Gating on an enforcing DMARC policy is the specification, not an optimisation.** A BIMI record has
+ * no effect without `p=quarantine` or `p=reject`, so a record published under `p=none` is inert and the
+ * lookup would be asking about something that cannot be in force. The cost follows from that: measured
+ * over the holdout the gate opens on 5.5% of analyses — 3.8% of abuse domains against 37.7% of
+ * legitimate ones — so this is one TXT query on roughly one analysis in eighteen, and the certificate
+ * fetch behind it happens on about one in nine hundred.
+ *
+ * The credit is nevertheless zero, and the census in `scripts/bimi-census.mts` is why: 5 records across
+ * 4,698 domains, one of which pointed at a certificate. See `lib/scoring/weights.ts`.
+ *
+ * **Keeping the query while the weight is zero is a deliberate exception to the rule that retired the
+ * `robots.txt` probe and the business-service names**, and it should be argued rather than assumed. That
+ * rule is that a round trip must be paid for by a fact that can move a verdict. Three things pay for
+ * this one instead. The gate makes it nearly free — 5.5% of analyses, and a certificate fetch on about
+ * one in nine hundred. The reported observation is itself the return: a domain asking mailbox providers
+ * to display its logo on the strength of a certificate that expired, or was issued to somebody else, is
+ * worth telling a reader about even though the model declines to price it. And the zero here is a
+ * statement about this holdout rather than about the signal, so a query that keeps producing the fact is
+ * what allows a future population to price it, where deleting it would guarantee the question stays
+ * unanswerable.
+ *
+ * The corollary is that the failure must be legible. `failureDetail` carries the specific finding for
+ * exactly that reason: an unexplained rejection reads as the checker being broken.
+ */
+async function collectBimi(
+  domain: string,
+  policy: string | undefined,
+  timeoutMs: number,
+): Promise<MailFacts['bimi']> {
+  if (policy !== 'quarantine' && policy !== 'reject') return undefined;
+
+  let records: string[];
+  try {
+    records = await txtAt(`default._bimi.${domain}`, timeoutMs);
+  } catch {
+    // The resolver did not answer, so nothing was established. Reporting that as "no record" would let
+    // a timeout read as a domain declining to publish one.
+    return undefined;
+  }
+
+  const parsed = records.map((record) => parseBimiRecord(record)).find(Boolean);
+  if (!parsed) return undefined;
+
+  if (!parsed.certificateUrl) {
+    return { record: true, verified: false, failure: 'no_certificate' };
+  }
+
+  let pem: string;
+  try {
+    pem = await fetchText(parsed.certificateUrl, { timeoutMs });
+  } catch {
+    return {
+      record: true,
+      certificateUrl: parsed.certificateUrl,
+      verified: false,
+      failure: 'unreachable',
+    };
+  }
+
+  const result = verifyVmc(pem, domain);
+  return {
+    record: true,
+    certificateUrl: parsed.certificateUrl,
+    verified: result.verified,
+    issuer: result.issuer,
+    markHolder: result.subject,
+    failure: result.failure,
+    // The specific half of the answer: which certificate lapsed, whose domain it was really for. A
+    // reader shown only that verification failed has been told to take it on trust.
+    failureDetail: result.detail,
   };
 }
 

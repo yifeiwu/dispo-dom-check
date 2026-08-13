@@ -99,6 +99,35 @@ export type MailFacts = {
   dkimSelectors: string[];
   dkimKeys: { selector: string; cnameTarget?: string; provider?: string }[];
   saasVendors: string[];
+  /**
+   * Throwaway-inbox providers this domain has published an ownership token for, read out of the same
+   * apex TXT set as `saasVendors` and costing nothing extra. Optional because a stored analysis made
+   * before the table existed has no answer, which must stay distinguishable from finding none.
+   */
+  disposableVerification?: string[];
+  /**
+   * BIMI, where an enforcing DMARC policy made the lookup meaningful. Absent means the gate never
+   * opened, no record was published, or the analysis predates the collector — all silence rather than a
+   * finding.
+   *
+   * `record` and `verified` are separate on purpose, and the gap between them is the entire point: the
+   * signal removed in 1.3.0 paid for `record` alone. `failure` says why a published record did not
+   * verify, which is worth reporting, since an expired certificate is a different thing from a forged
+   * one.
+   */
+  bimi?: {
+    record: boolean;
+    certificateUrl?: string;
+    verified: boolean;
+    /** The Mark Verifying Authority, present only where the chain reached one. */
+    issuer?: string;
+    /** The trademark holder named in the certificate subject. */
+    markHolder?: string;
+    /** Which check failed. Rendered through `VMC_FAILURE_REASONS`, never shown raw. */
+    failure?: string;
+    /** The specific finding behind `failure`: which certificate lapsed, whose domain it covers. */
+    failureDetail?: string;
+  };
 };
 
 export type SignupClass =
@@ -128,6 +157,21 @@ export type SignupFacts = {
   corroboration?: string[];
   /** True when MX points at the domain's own namespace. */
   selfHosted: boolean;
+  /**
+   * The address a mail exchanger resolved to, present only where it was the address rather than the
+   * hostname that identified the provider. Kept so the evidence can say which of the two matched: a
+   * reader shown a temp-mail verdict on a domain whose MX names its own zone is owed the reason.
+   */
+  matchedAddress?: string;
+  /**
+   * Whether the zone answers with mail exchangers for names nobody created.
+   *
+   * Three states, and the distinction carries a weight. `undefined` means no probe could be answered,
+   * so nothing was learned. An empty `hosts` array means both probes answered and the zone does not
+   * wildcard, which is a real finding rather than an absence. A populated one is the capability: every
+   * subdomain receives mail, so the registration yields unbounded deliverable addresses.
+   */
+  wildcardMx?: { hosts: string[] };
 };
 
 export type PricingFacts = {
@@ -163,6 +207,23 @@ export type SiteFacts = {
   parkingEvidence?: string;
   /** True when the title or body contains the domain's own label. */
   titleMatchesDomain: boolean;
+  /**
+   * The website platform serving this domain, where one identified itself in the response.
+   *
+   * Optional in the tri-state sense the rest of these facts use: absent means the page was never
+   * fetched or carried no platform evidence, which are both "nothing established" rather than
+   * "established that there is none". Absence is never penalised, since most legitimate sites are not
+   * on a hosted platform at all.
+   *
+   * See `lib/data/site-platforms.ts` for what separates the two confirmation tiers, and why only one of
+   * them can support a credit.
+   */
+  platform?: {
+    provider: string;
+    confirmation: 'served' | 'served_and_addressed';
+    paidCustomDomain: boolean;
+    matchedOn: string;
+  };
 };
 
 /**

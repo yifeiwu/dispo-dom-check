@@ -115,6 +115,25 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
       return age !== null && age < cfg.combinations.freeRoutingYoungNoSite.maxAgeDays && !hasSite(facts);
     },
   },
+  /*
+   * There is deliberately no wildcard-MX-plus-youth-plus-no-site conjunction, though 1.5.0 shipped with
+   * one for the length of a single audit.
+   *
+   * It was added by direct analogy with `combo.free_routing_young_no_site` above: a capability alone is
+   * ambiguous, and youth with nothing served is what removes the innocent reading. Swept over five folds
+   * stratified by families it was placed at zero, and swept again after the signal beside it was
+   * weighted it stayed at zero. The analogy does not survive the numbers. Free routing fires on 48% of
+   * abuse families, so its conjunction has a large population to sharpen; a wildcard MX appears on about
+   * 4%, and on that population youth and an absent site are already charged by `age.first_seen` and
+   * `site.substantive_content`, so a third charge moved no verdict in any fold.
+   *
+   * It was kept at zero for one release on the argument that a reader benefits from seeing a conjunction
+   * noticed and deliberately not charged for. That argument holds for `combo.correlated_absence`, which
+   * fires on most domains and records a decision not to punish a small business for absences. It does
+   * not hold here: firing on 1% of abuse domains and 0% of legitimate ones while contributing nothing,
+   * it told a reader almost nothing and cost a registry entry, a config key and a sweep knob to say it.
+   * The measurement is the durable artefact and it lives in `docs/CALIBRATION.md`.
+   */
   {
     id: 'combo.registrar_default_profile',
     mode: 'bonus',

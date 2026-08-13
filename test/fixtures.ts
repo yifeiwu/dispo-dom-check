@@ -192,6 +192,147 @@ export const tempMailDomain = (): DomainFacts =>
     pricing: { suffix: 'com', registration: 10.5, renewal: 11.2, renewalRatio: 1.07 },
   });
 
+/**
+ * The shape the hostname fingerprint above cannot see, and the reason it matched none of the 123
+ * domains the holdout labels disposable.
+ *
+ * The mail exchanger names the domain's own zone, exactly as the throwaway-inbox services instruct
+ * their custom-domain customers to configure it, so every table of provider hostnames reads this as an
+ * ordinary self-hosted mail setup. What gives it away is the address the exchanger resolves to, which
+ * is the one the provider publishes.
+ */
+export const inZoneTempMailDomain = (): DomainFacts =>
+  facts({
+    registration: { via: 'rdap', creation: daysAgo(200), expiry: yearsAhead(0.5), statuses: [], nameservers: [], termYears: 1 },
+    dns: {
+      ...EMPTY_DNS,
+      a: ['203.0.113.20'],
+      mx: [{ priority: 10, host: 'mx.example.com' }],
+    },
+    signup: {
+      class: 'temp_mail',
+      provider: 'TempMail.lol',
+      matchedHost: 'mx.example.com',
+      matchedAddress: '46.62.148.222',
+      selfHosted: true,
+    },
+    pricing: { suffix: 'com', registration: 10.5, renewal: 11.2, renewalRatio: 1.07 },
+  });
+
+/**
+ * A domain giving itself away in a record it published for an entirely different purpose.
+ *
+ * Nothing else here is incriminating: the mail exchanger is in-zone and unremarkable, the domain is
+ * old enough and the price is mainstream. The ownership token is the whole finding, which is what makes
+ * this the fixture for it.
+ */
+export const disposableTokenDomain = (): DomainFacts =>
+  facts({
+    registration: { via: 'rdap', creation: daysAgo(200), expiry: yearsAhead(0.5), statuses: [], nameservers: [], termYears: 1 },
+    dns: {
+      ...EMPTY_DNS,
+      a: ['203.0.113.21'],
+      mx: [{ priority: 10, host: 'mx.example.com' }],
+      txt: ['tm-custom-domain-verification=8a1f2c'],
+    },
+    mail: { ...EMPTY_MAIL, disposableVerification: ['TempMail.lol'] },
+    signup: { class: 'self_hosted', matchedHost: 'mx.example.com', selfHosted: true },
+    pricing: { suffix: 'com', registration: 10.5, renewal: 11.2, renewalRatio: 1.07 },
+  });
+
+/**
+ * A young domain serving nothing whose zone answers with mail exchangers for names nobody created, so
+ * one registration yields an unbounded supply of deliverable addresses.
+ */
+export const wildcardMxDomain = (): DomainFacts =>
+  facts({
+    registration: { via: 'rdap', creation: daysAgo(21), expiry: yearsAhead(0.94), statuses: [], nameservers: [], termYears: 1 },
+    dns: {
+      ...EMPTY_DNS,
+      ns: ['ns1.example.net'],
+      mx: [{ priority: 10, host: 'mx.example.com' }],
+    },
+    signup: {
+      class: 'self_hosted',
+      matchedHost: 'mx.example.com',
+      selfHosted: true,
+      wildcardMx: { hosts: ['mx.example.com'] },
+    },
+    pricing: { suffix: 'com', registration: 10.5, renewal: 11.2, renewalRatio: 1.07 },
+  });
+
+/** The same zone, probed and found not to wildcard. A finding, and deliberately not a credit. */
+export const probedNoWildcardDomain = (): DomainFacts => {
+  const profile = wildcardMxDomain();
+  profile.signup = { ...profile.signup!, wildcardMx: { hosts: [] } };
+  return profile;
+};
+
+/**
+ * A domain a website platform is genuinely serving, from the platform's own address space.
+ *
+ * Both halves are needed and neither is sufficient. The response markers say the platform answered; the
+ * address says the platform routes this name, which it does for accounts and not for strangers.
+ */
+export const hostedPlatformDomain = (): DomainFacts => {
+  const profile = establishedSmallBusiness();
+  profile.dns = { ...profile.dns!, a: ['23.227.38.65'] };
+  profile.site = {
+    ...profile.site!,
+    platform: {
+      provider: 'Shopify',
+      confirmation: 'served_and_addressed',
+      paidCustomDomain: true,
+      matchedOn: 'the x-shopid response header',
+    },
+  };
+  return profile;
+};
+
+/**
+ * The same evidence with the confirming half missing: the response looks like the platform, and the
+ * domain resolves nowhere near it. Anyone can send a header.
+ */
+export const platformServedOnlyDomain = (): DomainFacts => {
+  const profile = hostedPlatformDomain();
+  profile.dns = { ...profile.dns!, a: ['203.0.113.10'] };
+  profile.site = {
+    ...profile.site!,
+    platform: { ...profile.site!.platform!, confirmation: 'served' },
+  };
+  return profile;
+};
+
+/** A domain whose BIMI certificate verified to a Mark Verifying Authority. */
+export const verifiedBimiDomain = (): DomainFacts => {
+  const profile = establishedSmallBusiness();
+  profile.mail = {
+    ...profile.mail!,
+    dmarcPolicy: 'reject',
+    bimi: {
+      record: true,
+      certificateUrl: 'https://vmc.example.com/mark.pem',
+      verified: true,
+      issuer: 'DigiCert',
+      markHolder: 'Example Trademark Holder',
+    },
+  };
+  return profile;
+};
+
+/**
+ * A BIMI record whose certificate did not verify. This is the shape the signal removed in 1.3.0 used to
+ * pay +8 for, so it is the one a reinstatement is most likely to start crediting again by accident.
+ */
+export const unverifiedBimiDomain = (failure = 'no_certificate'): DomainFacts => {
+  const profile = verifiedBimiDomain();
+  profile.mail = {
+    ...profile.mail!,
+    bimi: { record: true, verified: false, failure },
+  };
+  return profile;
+};
+
 /** The account-farm profile: cheap suffix, first term, mail configured, nothing served. */
 export const farmProfileDomain = (): DomainFacts =>
   facts({
@@ -296,9 +437,11 @@ export const modestNewBusiness = (): DomainFacts =>
  * against nobody, so the two profiles must score identically. If they ever diverge, the model has
  * grown a credit an account farmer can mint from a text editor.
  *
- * DNSSEC is deliberately not among them. It is the one member of the footprint dimension that still
- * scores, because the resolver validates it, so adding it here would be a real difference rather than
- * an asserted one.
+ * DNSSEC is deliberately not among them, and stayed out when it stopped scoring in 1.5.0. Adding it
+ * would now cost nothing, which is the trap: it was demoted for being measurably flat on this
+ * population, not for being assertable, and the resolver validates it either way. Listing it beside
+ * records that are free to mint would file a true fact under the wrong reason, and the next person to
+ * read this fixture would take the wrong lesson from it.
  */
 export const selfAssertedRecords = (): DomainFacts => {
   const profile = modestNewBusiness();

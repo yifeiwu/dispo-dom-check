@@ -241,9 +241,19 @@ function deriveFlags(
 
   // Either route to the same conclusion raises the same flag. A -40 penalty rendered without the pill
   // that names it would leave a consumer filtering on flags unable to see the reason for the score.
-  if (facts.signup?.class === 'temp_mail' || facts.checkmail?.disposable) flags.add('disposable');
+  if (
+    facts.signup?.class === 'temp_mail' ||
+    facts.checkmail?.disposable ||
+    (facts.mail?.disposableVerification?.length ?? 0) > 0
+  ) {
+    flags.add('disposable');
+  }
   if (facts.signup?.class === 'forwarder' || facts.meta.relayDomain) flags.add('forwarder');
-  if (facts.signup?.class === 'free_routing') flags.add('catch_all_capable');
+  // A wildcard MX is the capability this flag names, stated more directly than free routing states it:
+  // the zone answers for addresses nobody has created yet.
+  if (facts.signup?.class === 'free_routing' || (facts.signup?.wildcardMx?.hosts.length ?? 0) > 0) {
+    flags.add('catch_all_capable');
+  }
   if (facts.dns && facts.dns.mx.length === 0) flags.add('no_mx');
   if (age !== null && age < 30) flags.add('too_new');
   if (facts.meta.providerSuffix) flags.add('provider_subdomain');

@@ -66,4 +66,12 @@ export const PARKING_BODY_FINGERPRINTS: readonly string[] = [
   'cpanel default page',
   'hostinger parking',
   'this domain has been registered',
+  /*
+   * Squarespace's parking bundle, which it serves on a domain registered through it that has no site
+   * attached. Matched on the asset path rather than the visible wording because the wording is
+   * localised: this was found on a domain titled 近日中に公開, which the `coming soon` fingerprint above
+   * misses while the three English-language siblings beside it in the holdout were caught. Every
+   * fingerprint in this list that is an English phrase has the same blind spot; an asset path does not.
+   */
+  'scripts-compressed/parking-page',
 ];

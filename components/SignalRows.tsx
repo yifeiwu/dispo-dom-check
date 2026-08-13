@@ -243,7 +243,7 @@ export function SignalRows({
         <Collapsible
           summary={(open) =>
             `${open ? 'Hide' : 'Show'} ${unscored.length} ${unscored.length === 1 ? 'finding' : 'findings'} that did not move the score`}
-          description="Each of these was observed and charged nothing. Some are heuristics that measured something and came out neutral; those tagged “never scored” are facts the model reports but deliberately never prices, because the domain asserts them about itself and nothing corroborates them."
+          description="Each of these was observed and charged nothing. Some are heuristics that measured something and came out neutral; those tagged “never scored” are facts the model reports but deliberately never prices. Most of them the domain asserts about itself with nothing to corroborate it, and the rest were measured against the holdout and found not to tell the two classes apart. Each rationale says which."
         >
           <ul className="mt-3 rounded-lg border border-dashed border-edge px-4">
             {unscored.map((entry) => (

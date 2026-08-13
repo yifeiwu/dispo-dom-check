@@ -1,4 +1,5 @@
 import { ageDays, daysUntil, type DomainFacts, type NameFacts } from '../facts';
+import { describeVmcFailure } from '../data/bimi-authorities';
 import type { Dimension, ScoringConfig } from './weights';
 
 /**
@@ -125,9 +126,87 @@ export const SIGNALS: readonly SignalDefinition[] = [
     weight: (cfg) => fixed(cfg.signup.tempMail),
     evaluate(facts, cfg) {
       if (facts.signup?.class !== 'temp_mail') return null;
+      // The address route has a signal of its own below, so that the audit can measure the two
+      // independently and so that one domain is not charged the same claim twice.
+      if (facts.signup.matchedAddress) return null;
       return {
         points: cfg.signup.tempMail,
         evidence: `Mail exchanger ${facts.signup.matchedHost} belongs to ${facts.signup.provider}`,
+        sourceUrl: sourceUrlFor(facts, 'dns'),
+      };
+    },
+  },
+  {
+    id: 'signup.temp_mail_endpoint',
+    dimension: 'signup',
+    label: 'Mail delivered to a throwaway-inbox service at its published address',
+    rationale:
+      'The signal above can only see an operator who points a domain at a hostname the service owns, and the custom-domain products these services sell do the opposite: they instruct the customer to publish a mail exchanger inside their own zone and give it an A record pointing at the provider. Every such domain is invisible to a table of provider hostnames however long that table grows, which is why the fingerprint matched none of the 123 domains the holdout labels disposable. The address behind the exchanger is what the arrangement cannot disguise, because one server takes the mail for every domain in the pool.',
+    weight: (cfg) => fixed(cfg.signup.tempMail),
+    /*
+     * Priced by reading `signup.tempMail` rather than by a weight of its own, because it is the same
+     * claim as the signal above reached by a different observation. See the note at that weight.
+     *
+     * It is a penalty, so the 1.3.0 rule confining credits to what a third party confirms does not
+     * reach it. That rule exists because a credit nothing can confirm is free for an operator to mint,
+     * and a domain whose mail lands on a throwaway-inbox provider's own server has minted nothing.
+     */
+    evaluate(facts, cfg) {
+      if (facts.signup?.class !== 'temp_mail' || !facts.signup.matchedAddress) return null;
+      return {
+        points: cfg.signup.tempMail,
+        evidence: `Mail exchanger ${facts.signup.matchedHost} names this domain's own zone but resolves to ${facts.signup.matchedAddress}, an address ${facts.signup.provider} publishes for custom domains`,
+        sourceUrl: sourceUrlFor(facts, 'dns'),
+      };
+    },
+  },
+  {
+    id: 'signup.disposable_token',
+    dimension: 'signup',
+    label: 'Ownership token for a throwaway-inbox service',
+    rationale:
+      'A service selling custom domains has to confirm the person configuring one controls it, and the cheapest proof is a token published in the apex TXT set. The record then names the service the domain is enrolled with, and it survives everything else being disguised: the domain can be bought anywhere, hosted anywhere and given a mail exchanger inside its own zone, and the string is still there. It is read out of a record the analysis already fetches, so it costs nothing.',
+    weight: (cfg) => fixed(cfg.signup.tempMail),
+    /*
+     * In the `signup` dimension rather than `mail`, which is where the record was read. Dimensions
+     * carry their own clamps and `mail` is bounded at -6, so filing it by where the evidence was found
+     * rather than by what it establishes would silently discard six sevenths of it. What this observes
+     * is the domain's signup capability; the TXT set is only the transport.
+     *
+     * It can fire alongside `signup.temp_mail`, and the sum then rests on the dimension floor at -40.
+     * That is the arithmetic the reputation verdict already relies on and the reason `signup.min` is
+     * where it is, not an oversight — one domain confirming the same thing two ways is worth no more
+     * than confirming it once.
+     */
+    evaluate(facts, cfg) {
+      const providers = facts.mail?.disposableVerification ?? [];
+      if (providers.length === 0) return null;
+      return {
+        points: cfg.signup.tempMail,
+        evidence: `The domain publishes a domain-ownership token for ${providers.join(', ')}, a throwaway-inbox service`,
+        sourceUrl: sourceUrlFor(facts, 'dns'),
+      };
+    },
+  },
+  {
+    id: 'signup.wildcard_mx',
+    dimension: 'signup',
+    label: 'Every subdomain receives mail',
+    rationale:
+      'This is the only observation in the model that watches the capability the dimension is named for rather than inferring it from who runs the mailbox. A wildcard MX means names nobody created still receive mail, so a single registration yields an unbounded supply of deliverable addresses at no further cost — which is what the throwaway-inbox services tell their custom-domain users to configure, in as many words, so that any subdomain works automatically. A legitimate operator can publish one too, which is why the weight sits mostly in the conjunction with youth and an absent website rather than here.',
+    weight: (cfg) => fixed(cfg.signup.wildcardMx),
+    /*
+     * Reads only the positive state. An empty `hosts` array means the zone was probed and does not
+     * wildcard, which is a real finding but not a creditable one: not having a capability is the
+     * ordinary case for every domain in the population, and paying for it would be the credit-for-an-
+     * absence that 1.3.0 spent a release removing. `undefined` is silence and never moves a score.
+     */
+    evaluate(facts, cfg) {
+      const hosts = facts.signup?.wildcardMx?.hosts ?? [];
+      if (hosts.length === 0) return null;
+      return {
+        points: cfg.signup.wildcardMx,
+        evidence: `Subdomains that do not exist still resolve to mail exchangers (${hosts.join(', ')}), so any address at this domain can receive mail`,
         sourceUrl: sourceUrlFor(facts, 'dns'),
       };
     },
@@ -537,6 +616,30 @@ export const SIGNALS: readonly SignalDefinition[] = [
     },
   },
   {
+    id: 'mail.bimi',
+    dimension: 'mail',
+    label: 'Verified Mark Certificate',
+    rationale:
+      'A credit withdrawn in 1.3.0 and reinstated in 1.6.0 with the missing half supplied. The old one paid +8 for a TXT record beginning with `v=BIMI1`, never fetched the Verified Mark Certificate the record points at, and so priced a pointer to nothing. This one fetches it and verifies it: the chain has to be current, cover this exact domain, verify link by link, and terminate at a key a Mark Verifying Authority is known to sign with. Nothing less would do, because a certificate naming DigiCert as its issuer takes a second to generate — only the key check distinguishes that from the real thing. What a genuine certificate establishes is a registered trademark, proof of control over it, and about a thousand dollars a year. A record whose certificate is missing, expired, borrowed from another domain or self-signed earns exactly nothing, which is the difference between this signal and the one it replaces.',
+    weight: (cfg) => fixed(cfg.mail.bimi),
+    evaluate(facts, cfg) {
+      const bimi = facts.mail?.bimi;
+      if (!bimi?.record) return null;
+      if (!bimi.verified) {
+        return {
+          points: 0,
+          evidence: `Publishes a BIMI record, but the mark could not be verified: ${describeVmcFailure(bimi.failure, bimi.failureDetail)}`,
+          sourceUrl: bimi.certificateUrl ?? sourceUrlFor(facts, 'dns'),
+        };
+      }
+      return {
+        points: cfg.mail.bimi,
+        evidence: `${bimi.issuer} issued a Verified Mark Certificate to ${bimi.markHolder ?? 'this domain'}, and it verifies against this domain`,
+        sourceUrl: bimi.certificateUrl,
+      };
+    },
+  },
+  {
     id: 'mail.spf_permit_all',
     dimension: 'mail',
     label: 'SPF authorises the entire internet',
@@ -672,50 +775,49 @@ export const SIGNALS: readonly SignalDefinition[] = [
    * being left to decay unread. See `lib/data/dns-services.ts`.
    */
 
-  // ---------------------------------------------------------------------------------------------
-  // Organisational footprint: positive-only.
-  // ---------------------------------------------------------------------------------------------
   /*
-   * The SaaS vendor census and DKIM key presence are no longer signals. Both were zeroed in 1.3.0 for
-   * the same reason — a TXT prefix match and a freely generated keypair are things a domain asserts
-   * about itself — and both are still collected and shown as observations rather than as heuristics
-   * weighted at nothing. See `lib/scoring/observations.ts`.
+   * The organisational-footprint dimension is gone entirely as of 1.5.0, and this is the whole of what
+   * used to be in it.
    *
-   * DNSSEC is what is left, and it is the reason the dimension still exists: the resolver validated the
-   * chain cryptographically, so the AD flag is somebody else's arithmetic rather than the domain's own
-   * claim.
-   */
-  /*
-   * There is deliberately no credit for standard business services being configured.
+   * The SaaS vendor census and DKIM key presence stopped being signals in 1.3.0, both for the same
+   * reason: a TXT prefix match and a freely generated keypair are things a domain asserts about itself.
+   * `footprint.dnssec` outlived them because that objection does not apply to it — the resolver
+   * validated the chain to the root, so the AD flag is somebody else's arithmetic — and it was described
+   * here as the reason the dimension still existed.
    *
+   * It was removed on a different basis, and the distinction matters enough to state. It is not
+   * unverifiable; it was measured and found flat. Across 185 families it fired on 5% of abuse and 6% of
+   * legitimate domains, a conditional lift interval of 0.94–1.02 spanning 1.00, and a ΔAUC interval
+   * spanning zero. Removing it left AUC unchanged and took two abuse domains out of a legitimate band at
+   * no cost to any legitimate one.
+   *
+   * What the reasoning missed is not that operators are indifferent to correctness, but that almost none
+   * of them are the ones deciding. Counted by domain rather than by family the credit is on 16% of abuse
+   * and 6% of legitimate names, which points the wrong way, and the suffix breakdown says why: `.cfd` is
+   * 47% signed and `.id` is 39% across 1,548 domains, against 4% for `.com` and 8% for `.org`. Those are
+   * the cheap bulk namespaces, and their registrars switch DNSSEC on by default. The signal was reading
+   * the registrar's default rather than the registrant's effort, and family weighting is the only reason
+   * it flattened to 5%/6% instead of reversing outright.
+   *
+   * The fact costs nothing to collect, because the AD flag rides along on an address query that happens
+   * anyway, so it became an observation rather than being deleted. See `lib/scoring/observations.ts`.
+   * With it went the dimension, its clamp and its entry in `DIMENSION_LABELS`: a dimension with no
+   * signals sums to zero on every domain and renders as an empty row, which is the same defect as a
+   * clamp too wide to ever bind.
+   *
+   * There is also deliberately no credit for standard business services being configured.
    * Autodiscovery, enterprise enrollment, SIP and calendaring records were read as residue from
    * configuring collaboration systems across an organisation, and paid up to +6 on a tier of how many
    * vendors were found. They are ordinary CNAME and SRV records: pointing one at a vendor requires no
    * account with that vendor, and the calendaring and SIP names were credited for pointing anywhere at
    * all.
    *
-   * Six of the DNS queries in `collectDns` existed only to feed this, so retiring the probes with the
-   * credit is the substance of the change rather than a side effect. The classifier table went too, and
+   * Six of the DNS queries in `collectDns` existed only to feed that, so retiring the probes with the
+   * credit was the substance of the change rather than a side effect. The classifier table went too, and
    * it was already failing quietly: `enterpriseregistration.windows.net` is what that probe returns and
    * it matched no pattern in the table, so 36 of 4,760 stored transcripts paid for an answer the
    * classifier then discarded. See `lib/data/dns-services.ts`.
    */
-  {
-    id: 'footprint.dnssec',
-    dimension: 'footprint',
-    label: 'DNSSEC validated',
-    rationale:
-      'DNSSEC is optional, fiddly and easy to break, so enabling it indicates an operator who cares about correctness. It is the one signal in this dimension still worth points, because it is the only one not taken on the domain\u2019s word: the resolver validated the chain to the root cryptographically, and a broken or absent signature cannot be asserted away. Enabling it is cheap, which is why it pays little. Most legitimate small businesses do not have it, so absence means nothing.',
-    weight: (cfg) => fixed(cfg.footprint.dnssec),
-    evaluate(facts, cfg) {
-      if (!facts.dns?.dnssecValidated) return null;
-      return {
-        points: cfg.footprint.dnssec,
-        evidence: 'The resolver validated this zone with DNSSEC',
-        sourceUrl: sourceUrlFor(facts, 'dns'),
-      };
-    },
-  },
 
   // ---------------------------------------------------------------------------------------------
   // Site existence.
@@ -733,6 +835,27 @@ export const SIGNALS: readonly SignalDefinition[] = [
         points: cfg.site.substantiveContent,
         evidence: `Returns ${facts.site.status} with roughly ${facts.site.contentLength} characters of readable content`,
         sourceUrl: facts.site.finalUrl,
+      };
+    },
+  },
+  {
+    id: 'site.hosted_platform',
+    dimension: 'site',
+    label: 'Served by a website platform under a paid plan',
+    rationale:
+      'A credit withdrawn in 1.2.0 and reinstated in 1.6.0 against a different observation. The old one classified the destination of an apex CNAME, which is a record the domain writes about itself: pointing a name at a platform requires no account with it, so the credit priced an intention. This one is paid only where the platform answered — its own response headers or asset CDN in the page — *and* the domain resolves into address space the platform publishes for custom domains. That second half is the part a domain cannot arrange alone, because the platform has to route the name and it routes names attached to accounts. None of the platforms this can match attaches a custom domain on a free tier, so the routing is evidence somebody is paying. Costs no request: both halves are read from the page already fetched and the addresses already resolved.',
+    weight: (cfg) => fixed(cfg.site.hostedPlatform),
+    evaluate(facts, cfg) {
+      const platform = facts.site?.platform;
+      if (!platform) return null;
+      // The weaker tier is reported as an observation instead, since a response header is whatever a
+      // server chooses to send and an asset reference can be a page merely linking to a platform.
+      if (platform.confirmation !== 'served_and_addressed') return null;
+      if (!platform.paidCustomDomain) return null;
+      return {
+        points: cfg.site.hostedPlatform,
+        evidence: `${platform.provider} is serving this domain from its own address space, which it routes for custom domains on a paid plan (matched on ${platform.matchedOn})`,
+        sourceUrl: facts.site?.finalUrl,
       };
     },
   },

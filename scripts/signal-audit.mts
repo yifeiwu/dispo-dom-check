@@ -825,6 +825,13 @@ cached.forEach((entry, position) => {
  */
 const SIGNAL_SOURCES: Record<string, string[]> = {
   'signup.temp_mail': ['signup'],
+  'signup.temp_mail_endpoint': ['signup'],
+  'signup.wildcard_mx': ['signup'],
+  /*
+   * Read out of the apex TXT set, which the DNS collector fetches and the mail collector matches
+   * against, so a DNS failure and a mail failure both starve it.
+   */
+  'signup.disposable_token': ['dns', 'mail'],
   'signup.free_routing': ['signup'],
   'signup.forwarder': ['signup'],
   'signup.paid_tenant': ['signup'],
@@ -844,13 +851,15 @@ const SIGNAL_SOURCES: Record<string, string[]> = {
   'age.registry_hold': ['rdap', 'whois'],
   'age.pending_delete': ['rdap', 'whois'],
   'mail.commercial_rua': ['mail'],
+  'mail.bimi': ['mail'],
   'mail.spf_permit_all': ['mail'],
   'mail.no_spf_with_site': ['mail', 'site'],
   'configuration.record_breadth': ['dns'],
   'configuration.title_matches_domain': ['site'],
-  'footprint.dnssec': ['dns'],
   'site.substantive_content': ['site'],
   'site.parked': ['site'],
+  // Both halves of the confirmation: the served response, and the addresses it is checked against.
+  'site.hosted_platform': ['site', 'dns'],
   'site.no_address_when_young': ['dns', 'rdap', 'whois'],
   'name.template_digits': [],
   'name.vetted_suffix': [],
@@ -1015,7 +1024,18 @@ for (const definition of SIGNALS) {
 
   const applies = stat.applicable.abuse + stat.applicable.legit + stat.applicable.privacy;
   const fires = stat.fired.abuse + stat.fired.legit + stat.fired.privacy;
-  const movesBands = ablation.falsePositives !== 0 || ablation.falseNegatives !== 0;
+  /**
+   * What removing this signal would cost in verdicts, as one number, positive meaning worse.
+   *
+   * Declared here rather than beside its use below because the flatness test needs it too, and the
+   * asymmetry matters. The flatness test previously read `movesBands`, which is true whenever the count
+   * changes *in either direction* — so a signal the ranking could not distinguish from noise was spared
+   * removal not only when removing it cost verdicts, which is the intent, but equally when removing it
+   * gained them, which is the opposite of the intent. That is a guard written for one case and applied
+   * to both, and it silently protected the one class of signal there is least reason to keep: measured,
+   * indistinguishable from random, and mildly harmful at the boundary.
+   */
+  const bandCost = ablation.falsePositives + ablation.falseNegatives;
   /**
    * A signal whose firings are overwhelmingly in the ungraded privacy group cannot be judged by any
    * metric on this page, because the graded classes are the only thing they measure. That is a property
@@ -1032,7 +1052,7 @@ for (const definition of SIGNALS) {
   else if (ablation.hi < 0) verdict = 'REMOVE measurably harmful';
   else if (privacyTargeted) verdict = KEEP_UNGRADED;
   else if (firedFamilies < familyGate) verdict = KEEP_UNMEASURED;
-  else if (liftLo <= 1 && liftHi >= 1 && ablation.lo <= 0 && ablation.hi >= 0 && !movesBands) {
+  else if (liftLo <= 1 && liftHi >= 1 && ablation.lo <= 0 && ablation.hi >= 0 && bandCost <= 0) {
     verdict = 'REMOVE flat';
   } else if (ablation.lo > 0) verdict = 'KEEP measurably useful';
   else verdict = 'KEEP';
@@ -1047,7 +1067,6 @@ for (const definition of SIGNALS) {
    * many. Where the ranking says remove and the bands say the removal costs more verdicts than it fixes,
    * the bands win and the disagreement is printed rather than resolved silently.
    */
-  const bandCost = ablation.falsePositives + ablation.falseNegatives;
   if (verdict.startsWith('REMOVE') && bandCost > 0) {
     verdict = `KEEP bands disagree, removal costs ${bandCost} verdicts`;
   }
@@ -1247,12 +1266,37 @@ const KNOBS: Knob[] = [
     },
   },
   {
+    id: 'site.hostedPlatform',
+    current: DEFAULT_CONFIG.site.hostedPlatform,
+    values: [0, 2, 4, 6],
+    reason:
+      'a reinstated credit entered at zero so shipping nothing is among the candidates, and capped low because clamps.site.max is 6 and substantiveContent alone reaches it',
+    apply: (cfg, value) => {
+      (cfg.site as any).hostedPlatform = value;
+    },
+  },
+  {
     id: 'site.parked',
     current: DEFAULT_CONFIG.site.parked,
     values: [-18, -15, -12, -9, -6],
     reason: 'the signal where ranking and bands disagree most sharply',
     apply: (cfg, value) => {
       (cfg.site as any).parked = value;
+    },
+  },
+  /*
+   * The two 1.5.0 weights, entered at zero so that the sweep places them rather than confirming a
+   * number somebody chose first. A knob whose current value is zero is the honest way to ask this
+   * question: every candidate is judged against shipping nothing, so the signal has to earn its weight
+   * outright instead of defending one it was given.
+   */
+  {
+    id: 'signup.wildcardMx',
+    current: DEFAULT_CONFIG.signup.wildcardMx,
+    values: [0, -3, -6, -9, -12, -15],
+    reason: 'a new signal, and the only one that observes unlimited addressing directly rather than inferring it from a provider class',
+    apply: (cfg, value) => {
+      (cfg.signup as any).wildcardMx = value;
     },
   },
 ];

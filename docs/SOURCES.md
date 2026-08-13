@@ -136,14 +136,68 @@ lookup would parse as a registry that publishes nothing.
 - `www` is resolved with a single address query and no separate CNAME lookup. A resolver returns the
   CNAME chain alongside whatever it resolved to, so a `www` that is only a CNAME is already visible in
   that answer; across 4,659 stored transcripts the separate query changed the result for one domain.
-- Two probe sets were retired in `1.3.0` along with the credits they fed, taking the DNS fan-out from 21.7
-  queries per analysis to 14.6 — a third of the DNS work, measured across 4,746 stored transcripts and
-  confirmed by counting what the collectors ask for under replay. `default._bimi` TXT is no longer
-  requested, and neither are the six standard business-service names — `autodiscover`,
+- Two MX queries at randomised-looking labels under the domain, added in `1.5.0`, which together answer
+  whether the zone publishes a wildcard MX — the capability of receiving mail at every possible address.
+  They run only where the domain has an MX record at all, and a wildcard is declared only when both
+  labels return the same non-empty set, since one label alone false-positives on resolvers that
+  synthesise answers.
+
+  The labels are **derived from the domain by hash rather than drawn at random**, which is a constraint
+  imposed by the calibration harness rather than a preference. Recorded responses are keyed by request
+  URL, so a label chosen afresh each run would never match what was captured: every replayed analysis
+  would report two misses and the lookups would throw, making the holdout unmeasurable. Nothing is
+  conceded to an adversary by this, because the label only has to be a name the operator did not create,
+  and an operator who drops the wildcard to evade the probe has given up the capability it detects.
+- One address query for the mail exchanger, added in `1.5.0`, but **only where that exchanger sits inside
+  the domain's own zone** — the shape the throwaway-inbox services instruct their custom-domain users to
+  configure. It is deliberately not extended to every unrecognised exchanger, which would spend a round
+  trip on a large share of ordinary domains to ask a question their hostname has already answered.
+- The net effect on the fan-out is **+2 queries for any domain with mail, and +3 for the minority whose
+  mail exchanger names its own zone**. That is the first increase since `1.3.0` cut a third of the DNS
+  work, and it is recorded here rather than absorbed quietly: the standing rule is that a query is paid
+  for by a fact that can move a verdict, and `docs/CALIBRATION.md` reports what these bought.
+- `default._bimi` TXT, removed in `1.3.0` and restored in `1.6.0` **behind a gate that did not exist
+  before**: it runs only where the DMARC policy is `p=quarantine` or `p=reject`. That is the BIMI
+  specification rather than a saving — a BIMI record has no effect without an enforcing policy, so a
+  record published under `p=none` is inert and asking about it would be asking about something that
+  cannot be in force. The saving follows from it. Measured over the holdout the gate opens on **5.5% of
+  analyses**: 3.8% of abuse domains against 37.7% of legitimate ones.
+
+  The restoration is conditional on the record now being checked rather than read. `1.3.0` removed the
+  query because the credit it fed only established that a string began with `v=BIMI1`; the query is back
+  because the certificate behind it is now fetched and verified. See `lib/bimi-vmc.ts`.
+
+  The query is kept even though the credit is zero, which is an exception to the rule in the bullet
+  below and is argued as one in `docs/SCORING.md`. The short version: the gate makes it nearly free, and
+  the reported outcome — including *why* an unverified record failed — is the return on it.
+- The six standard business-service names were retired in `1.3.0` and stay retired: `autodiscover`,
   `enterpriseenrollment`, `enterpriseregistration`, `_sip._tls`, `_sipfederationtls._tcp` and
   `_caldav._tcp`. Publishing any of them requires no account with the vendor named, so nothing they
   established could move a verdict, and a fact the model is indifferent to does not justify a round trip
-  on every analysis. See `docs/SCORING.md`.
+  on every analysis. Together with the original BIMI removal this took the DNS fan-out from 21.7 queries
+  per analysis to 14.6 — a third of the DNS work, measured across 4,746 stored transcripts and confirmed
+  by counting what the collectors ask for under replay. See `docs/SCORING.md`.
+
+### Verified Mark Certificates — conditional, roughly one analysis in nine hundred
+
+- The URL in the `a=` tag of a BIMI record, fetched as a PEM bundle. There is no fixed endpoint: the
+  domain names its own, and the issuers host them, so in practice this is a request to `vmc.digicert.com`
+  or an equivalent.
+- **It is the only request in the model made to a party the domain merely names**, which needs stating
+  plainly given the "no reputation lookups" claim elsewhere. What is fetched is a document, and it is
+  judged on whether it verifies cryptographically — not on any opinion the issuer holds about the domain.
+  A certificate that fails any check scores nothing, and no third party is asked what it thinks.
+- Two gates in series make it rare. The DMARC gate opens on 5.5% of analyses, and of the holdout domains
+  behind it, 5 published a BIMI record and 1 named a certificate: roughly **one fetch per nine hundred
+  analyses**.
+- Verification is offline once the bytes arrive, over `node:crypto`, with no dependency and no second
+  request: validity windows, subject coverage of the domain, each chain link verified against its
+  parent's key, and a key above the leaf matched against a pinned Mark Verifying Authority.
+- The pinned keys were **derived from observation rather than transcribed**. `scripts/bimi-anchors.mts`
+  fetches the live chains of the brands in `benchmark-bimi/` and reports which keys they climb to;
+  eighteen unrelated companies agreeing on one DigiCert key is evidence it is an authority key, where a
+  fingerprint copied from a vendor page would be an act of faith in the page. The same run corrected the
+  authority list, which had omitted GlobalSign.
 
 ### Suffix pricing — committed snapshot, no network
 
@@ -208,6 +262,11 @@ countries in a way that a backfill could not. See `docs/SCORING.md`.
   forwards elsewhere never serves the page itself.
 - **Soft 404s are detected by status code, not body size**, since a large custom error page is
   otherwise indistinguishable from a real page.
+- The response headers and body are also read for website-platform markers, added in `1.6.0`. This costs
+  **no request at all**: it inspects the fetch already made and the addresses already resolved. Its
+  predecessor `configuration.hosted_service`, removed in `1.2.0`, did cost a query — an apex CNAME lookup
+  whose destination the domain chose — and the reason this one can exist is precisely that it asks a
+  question the bytes on hand already answer. See `lib/data/site-platforms.ts`.
 
 ### Check-Mail — third-party reputation (optional, metered)
 
@@ -262,12 +321,15 @@ feed fetched per request. Verified classes:
 | Registrar free forwarding | Bundled free with any domain at the registrar and catch-all capable. Its paid mailbox product resolves elsewhere and is the opposite signal. |
 | Free tiers of hosted mail | Several providers accept any custom domain on a free plan. Where a provider's free and paid tiers share mail exchangers they cannot be separated from DNS, which is noted in the table. |
 | Temp-mail | Throwaway-inbox operators self-brand their mail exchangers, and keep the same ones as they rotate front-end domains. |
+| Temp-mail endpoints | The IPv4 addresses those services publish in their own custom-domain setup instructions, matched only where the mail exchanger sits inside the domain's own zone and so names nothing useful. This is adjacent to the hosting reputation rejected below, and the distinction is that it matches a specific documented mail endpoint rather than judging an ASN or a prefix; the precedent is the routing-prefix corroboration that has shipped since `1.0.0`. Entries come from provider documentation only — fitting them to the labelled holdout would make every figure that holdout then produced circular. An endpoint that moves silently stops matching and costs nothing. |
+| Temp-mail ownership tokens | The apex TXT tokens those services ask a customer to publish to prove control of a domain. Read out of a record already fetched, so it costs no query. Restricted to apex-visible tokens: a provider that puts its token at a dedicated subdomain would cost a lookup on every analysis to find a record almost no domain has. |
 | Alias forwarders | Unmistakable per-provider mail exchangers. |
 | Shared relay domains | Matched on the submitted domain, since relay users receive mail at the provider's domain and never point their own MX. |
 | Paid mail tenancy | Business suites and enterprise mail gateways, used as a weak positive. |
 | Consumer mail infrastructure | Matched on mail exchanger so that a large free provider's vanity domains route to `out_of_scope` generically, instead of requiring every one to be enumerated. |
 | Registrar defaults | Requires the RDAP registrar identity, its default nameservers and its bundled forwarding MX to agree. No component is negative alone. |
 | Redirect targets | Known parking, hosted-site and public-profile destinations are classified locally; an unrecognised external destination remains unknown rather than guessed. |
+| Website platforms | Per platform: the markers its edge emits, the address ranges it publishes for custom domains, and whether attaching one requires a paid plan. Only the address ranges support a credit, since headers and asset references are what a server chooses to send. Ranges are listed only where the platform answers from its own space — several front their edge with a general-purpose CDN, and a range identifying Cloudflare rather than the platform is worse than none. Two entries are load-bearing corrections rather than data: Ghost is marked as not implying payment because it is self-hostable, and a Squarespace parking page is never read as a platform serving a domain, because Squarespace is also a registrar. |
 
 Two tables that sat here are gone, each with the only credit that read it. A custom-domain website-platform
 table, matched on apex or `www` CNAME target and split so that a free platform did not imply spend, went in

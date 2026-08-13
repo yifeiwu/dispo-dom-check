@@ -119,6 +119,53 @@ is the entire reason the exception is affordable at this size and would not be a
 The vendor's `block`, `valid` and `is_email_forwarder` fields are shown as evidence and never scored;
 `docs/SOURCES.md` records which rejected judgement each one would reintroduce.
 
+Three rows added in `1.5.0` exist because the throwaway-inbox fingerprint was measured and found to match
+**none of the 123 holdout rows labelled `DISPOSABLE`**. That gap is structural rather than a short table.
+The services in question sell custom domains, and their setup instructions tell the customer to publish a
+mail exchanger inside their own zone pointing at the provider — so the hostname names the customer and
+reveals nothing, and no amount of lengthening a list of provider hostnames can reach it. Each row attacks
+the gap from a different angle, and `docs/CALIBRATION.md` records that after a full re-collection **the
+gap has not closed**:
+
+- `signup.temp_mail_endpoint` resolves an in-zone mail exchanger and matches the address against endpoints
+  the providers publish. It is priced by reading `signup.tempMail` rather than by a weight of its own,
+  because it is the same claim reached by a different observation. On the holdout it fired on **no
+  domains at all**: the table currently holds one published address, and none of the 123 uses it.
+- `signup.disposable_token` reads an ownership token for one of those services out of the apex TXT set,
+  which the analysis already fetches, so it costs nothing. It also fired on **no domains at all**.
+- `signup.wildcard_mx` is the only one that reaches the population, and it is the only signal in the model
+  that observes unlimited addressing directly rather than inferring it from a provider class. It is
+  priced at -12 by a five-fold sweep and is discussed below, because what it measures is not what it was
+  added for.
+
+The honest summary is that two of the three are unfalsified rather than validated. Both are kept: each is
+a bounded cost — one conditional lookup and one table read — and a fingerprint that has not yet met its
+population is a different thing from one measured and found flat. Neither may be extended by fitting
+addresses or tokens to the 123 rows, which would make every figure the holdout afterwards produced
+circular.
+
+**`signup.wildcard_mx` is the model's clearest case of ranking and bands disagreeing, and it ships on the
+bands.** It fires on 124 families, 3% of abuse families and 5% of legitimate ones, with a lift interval of
+0.91–1.01 that spans 1.00 and a ΔAUC of -0.001. By ranking it is not a discriminator: a wildcard MX is
+slightly *more* common among the legitimate half of this holdout than the abuse half, because mail-server
+operators publish one so departmental names keep working. What earns it a weight is that removing it puts
+seven abuse domains back into a legitimate band while admitting no legitimate domain to an actionable one,
+and a five-fold sweep entered at zero chose -12 unanimously out of sample. The service ships bands, so the
+bands decide — the same tier three earlier signals already carry. It is recorded here rather than buried
+because a future reader looking only at the lift column would reasonably propose deleting it.
+
+The conjunction `combo.wildcard_mx_young_no_site` was swept over the same folds, stayed at **zero** in all
+five, and was **removed in the same release it arrived in**. The reasoning that predicted a weight was the
+one that priced `combo.free_routing_young_no_site`, and it does not transfer: free routing fires on 48% of
+abuse families, so its conjunction has a large population to sharpen, whereas a wildcard MX appears on
+about 4% and youth with no site is already charged there by `age.first_seen` and
+`site.substantive_content`. It shipped at zero for one audit on the argument that a reader benefits from
+seeing a conjunction noticed and deliberately not charged for. That argument holds for
+`combo.correlated_absence`, which fires on most domains and records a decision not to punish a small
+business for absences; it does not hold for a conjunction firing on 1% of abuse domains and 0% of
+legitimate ones while contributing nothing. The measurement is the durable artefact and it is this
+paragraph.
+
 ### Registration economics
 
 Cheap suffixes and steep first-year discounts are priced here, in tiers; a name issued free by a
@@ -190,6 +237,53 @@ withholding a credit is the whole of the effect.
 **Absent DMARC is never penalised on its own,** and now neither is its presence rewarded. Plenty of
 legitimate small businesses never set it up. The only negatives are affirmative misconfigurations.
 
+#### BIMI, reinstated in 1.6.0 with the certificate actually checked
+
+`mail.bimi` was deleted in `1.3.0` for the clearest instance of the defect that release was about: it
+paid `+8` for a TXT record beginning with `v=BIMI1` and never fetched the Verified Mark Certificate the
+record points at. The credit priced a purchase and measured a string.
+
+The purchase is real. A VMC requires a registered trademark, evidence of control over it, and roughly a
+thousand dollars a year, renewed annually. It is among the most expensive things a domain can be made to
+demonstrate, and none of it is inherited by publishing a pointer to nothing. So the signal is back, with
+the certificate retrieved and put through four checks in [`lib/bimi-vmc.ts`](../lib/bimi-vmc.ts): every
+certificate in the chain is current, the leaf covers this exact domain, each link verifies against its
+parent's key, and some certificate above the leaf carries a key a Mark Verifying Authority is known to
+sign with.
+
+The last of those is the one that matters, and it is worth saying why the other three are not enough. A
+chain that is current, internally consistent and rooted in a certificate whose organisation reads
+`DigiCert, Inc.` takes about a second to generate, because an issuer name is a string a certificate
+asserts about itself. Only pinning the key distinguishes that from the real thing. `test/bimi-vmc.test.ts`
+contains exactly that forgery as a fixture, and requires it to be rejected.
+
+**The credit is nevertheless zero.** A census of all 4,698 holdout domains — one TXT query each, in
+`scripts/bimi-census.mts` — found five BIMI records, of which one pointed at a certificate. The
+measurement, and the reason a signal this strong in principle cannot be priced here, is in
+[`CALIBRATION.md`](CALIBRATION.md).
+
+The lookup is gated on `p=quarantine` or `p=reject`. That is the BIMI specification rather than a
+saving — a record is inert without an enforcing policy — and the saving follows from it: the gate opens
+on 5.5% of analyses, with a certificate fetch behind it on roughly one in nine hundred.
+
+**Keeping the query at a zero weight is a deliberate exception**, and worth stating as one, because the
+standing rule is that a round trip must be paid for by a fact that can move a verdict — the rule that
+retired the `robots.txt` probe and the six business-service names. Three things pay for this one
+instead. The gate makes it nearly free. The reported observation is itself the return: a domain asking
+mailbox providers to display its logo on the strength of a certificate that expired, or that was issued
+to somebody else, is worth telling a reader about whether or not the model prices it. And the zero is a
+statement about this holdout rather than about the signal, so continuing to collect the fact is what
+lets a future population price it, where deleting the query would guarantee the question stays
+unanswerable.
+
+That only holds if the failure is legible, so **the reason is reported in words rather than as a
+status**. `VMC_FAILURE_REASONS` in [`lib/data/bimi-authorities.ts`](../lib/data/bimi-authorities.ts) is a
+total mapping from every failure to a sentence, and the verifier records the specific finding beside it:
+which certificate lapsed and when, or which domain a borrowed certificate really covers. An unexplained
+rejection reads as the checker being broken, which in this holdout would have been the wrong conclusion
+every single time — all four rejections among twenty genuine certificates were lapsed certificates,
+including one belonging to a Mark Verifying Authority.
+
 **The presence of inbound mail scores nothing in either direction.** Absence was never penalised, on the
 grounds that an account farmer has to receive the verification message; the same argument rules out
 paying for presence, which is why the `+2` that used to sit at the top of this table is gone. See the
@@ -218,24 +312,62 @@ the dimension can produce +12. The two credits overlap, since the domain with wi
 usually also the one whose title matches its own label, so the pair pays twice for a single underlying
 fact. Bounding the sum was preferred to repricing either signal, because each is well-behaved alone.
 
-### Organisational footprint
+### Organisational footprint, removed in 1.5.0
 
-One signal, a validated DNSSEC chain. The SaaS verification census and DKIM selector presence are still
-collected and shown, as observations rather than as signals weighted at zero; see
-[`lib/scoring/observations.ts`](../lib/scoring/observations.ts).
+There is no such dimension any more. It is described here because it was a dimension for four versions and
+because the way it ended is the more useful half of the story.
 
-The dimension was built on the premise that a verification record is the residue of someone completing a
+It was built on the premise that a verification record is the residue of someone completing a
 domain-verification step inside a paid product. The residue is indistinguishable from the thing itself:
 the census matches a TXT prefix, no vendor publishes any way to confirm a token it issued, and five
 invented strings earned the top tier of +12. DKIM keys are free to generate, and only the DNS half of
-signing is observable.
+signing is observable. Both were demoted to observations in 1.3.0, and the business-service tiers were
+deleted outright with the six DNS queries per analysis that fed them.
 
-DNSSEC survives and is the reason the dimension still exists. The resolver validated the chain to the
-root cryptographically, so the `AD` flag is somebody else's arithmetic rather than the domain's claim. It
-is cheap to enable, which is why it pays little, but it cannot be asserted.
+`footprint.dnssec` survived that and was described as the reason the dimension still existed, because the
+objection that took the others does not touch it: the resolver validated the chain to the root, so the
+`AD` flag is somebody else's arithmetic rather than the domain's claim, and it cannot be asserted away.
 
-This dimension is positive-only, because having none of these records is the normal condition of a
-legitimate small business rather than evidence of anything.
+**It was removed on a measurement instead, and the distinction is the point.** Across 185 families it
+fired on 5% of abuse domains and 6% of legitimate ones — a conditional lift interval of 0.94–1.02 spanning
+1.00, and a ΔAUC interval spanning zero. Removing it left AUC unchanged at 0.943 and took two abuse
+domains out of a legitimate band at no cost to any legitimate one. A credit paid to both classes at the
+same rate is not a credit, whatever its rationale says.
+
+The family-weighted figures understate it. Counted by domain the credit lands on **16% of abuse names
+against 6% of legitimate ones**, which points the wrong way, and the suffix breakdown explains both that
+and why the weighting hides it:
+
+| Suffix | Domains | Signed | Legitimate rows |
+| --- | --- | --- | --- |
+| `.cfd` | 49 | 47% | 0 |
+| `.id` | 1,548 | 39% | 5 |
+| `.org` | 87 | 8% | 18 |
+| `.net` | 71 | 6% | 7 |
+| `.com` | 751 | 4% | 76 |
+
+The signed domains are concentrated in the cheap bulk namespaces, whose registrars enable DNSSEC by
+default, and those namespaces are where the generated abuse families live — so family weighting collapses
+hundreds of signed names to a handful of counts and flattens a reversed signal into a level one. The
+`.com` and `.org` rates match ordinary gTLD adoption, which is the tell: on the suffixes where signing is
+still a decision, almost nobody makes it.
+
+So the credit was reading the registrar's default rather than the registrant's effort. The original
+reasoning was not wrong about DNSSEC being fiddly; it was wrong about who is doing the fiddling. That
+generalises, and it is the reason to read this section rather than just note the removal: **a credit for a
+capability holds only while the capability still costs the registrant something.** One-click enablement
+turns effort into a checkbox, and the signal decays without anything in the model changing.
+
+The fact is still collected and still reported, as an observation, because the `AD` flag rides along on an
+address query that happens anyway. It is the only entry in
+[`lib/scoring/observations.ts`](../lib/scoring/observations.ts) that is there for being *measured flat*
+rather than for being self-asserted, and the file keeps the two cases apart deliberately: the first is a
+statement about this holdout that a better collection could overturn, the second is not.
+
+The dimension went with its last signal rather than being left empty, on the rule the clamps section
+states — a bound over a dimension that cannot reach it reads as protection while providing none, and a
+dimension with no signals is that same defect one level up, summing to zero on every domain and rendering
+as a row that always says nothing.
 
 ### Site existence
 
@@ -250,6 +382,36 @@ An off-domain redirect is neutral rather than penalised, which is a measured res
 oversight; see the removals below. It still withholds the content credit, because a root that forwards
 elsewhere never serves the page itself, so redirecting costs a domain the +6 without charging it
 anything.
+
+#### Hosted platform, reinstated in 1.6.0 and costing no request
+
+`configuration.hosted_service` was removed in `1.2.0`. It classified the destination of an apex CNAME,
+which is a record the domain writes about itself: pointing a name at Shopify requires no account with
+Shopify, so the credit priced an intention. The DNS query feeding it was retired at the same time.
+
+`site.hosted_platform` credits a different observation. It fires only where the platform *answered* —
+its own response headers or asset CDN in the page that [`collectSite`](../lib/collect/site.ts) already
+fetched — **and** the domain resolves into address space the platform publishes for custom domains. The
+second half is what the domain cannot arrange alone: the platform has to route the name, and it routes
+names attached to accounts. None of the platforms in [`lib/data/site-platforms.ts`](../lib/data/site-platforms.ts)
+attaches a custom domain on a free tier, so being routed is evidence somebody is paying.
+
+Both halves come from data the analysis already holds, so unlike its predecessor this costs no request
+at all. The weaker tier — platform markers without the matching addresses — is reported as an
+observation, because a server sends whatever headers it likes and a page can link to a platform without
+living on one.
+
+Two entries in the table are worth reading for what they say about the argument rather than the
+platforms. Ghost is marked as not implying payment, because Ghost is open source and self-hostable, so
+its markers are equally consistent with somebody running it on a rented box for nothing. And Squarespace
+required a fix found only by measurement: it is a registrar as well as a site builder, and a domain
+registered through it with no site attached is served a Squarespace parking page, from Squarespace
+addresses, carrying Squarespace's headers. That satisfies every test the scored tier applies while being
+the opposite of what the tier establishes. A parked page is now never read as a platform serving a
+domain. Where a platform is also the registrar, serving proves nothing about a purchase.
+
+**The credit is zero**, on six domains at the scored tier and the clamp that would have swallowed it
+anyway. See [`CALIBRATION.md`](CALIBRATION.md).
 
 ### Name pattern
 
@@ -352,7 +514,7 @@ Applied after summation, in order:
    the age belongs to the provider, and marks the result as scoped to the subdomain.
 
 Band boundaries are positioned from the measured distributions of a labelled holdout rather than chosen
-for roundness, since the two distributions cross at about 55. See `docs/CALIBRATION.md`.
+for roundness, since the two distributions cross in the low fifties. See `docs/CALIBRATION.md`.
 
 | Band | `legitimacy` | Verdict |
 | --- | --- | --- |
@@ -371,11 +533,13 @@ to 12% rather than holding the operating point the model has always been tuned t
 The `probably_legitimate` floor is the one that did not move. It was 58 under `1.0.0`, followed the
 distribution down to 55 when the `+2` for MX presence was removed in `1.1.0`, and has now held through a
 twentyfold increase in the abuse sample, every removal in `1.2.0`, the largest single change to the scale
-the model has had, and a complete re-collection of the holdout. It is still the crossover, at a Youden J of
-0.683 against 0.684 for the best threshold available.
+the model has had, and a complete re-collection of the holdout. Under `1.5.0` it sits just above the
+crossover rather than on it, at a Youden J of 0.665 against 0.683 for the best threshold available, which
+is 51. It stays at 55 because the four points between them are worth 8 legitimate domains and 88 abuse
+ones, and taking that trade would push abuse in a legitimate band past the rate this model is tuned to.
 
 The ceiling on the actionable bands moved from 49 to 39, and it is placed by the false-positive budget
-rather than by separation: 3.8% of legitimate domains fall below 40, inside the 5% rate `1.1.0` and `1.2.0`
+rather than by separation: 3.3% of legitimate domains fall below 40, inside the 5% rate `1.1.0` and `1.2.0`
 both shipped. The `high_risk` ceiling moved from 24 to 18, which is exactly where it stops taking more than
 2% of legitimate domains; this is the one boundary where being wrong means blocking somebody real, so it
 takes the measured limit rather than a margin past it. The `established` floor moved from 80 to 70, three
@@ -561,7 +725,7 @@ figure is family-weighted, so one operator's several hundred generated names cou
 | `economics.vetted_suffix`, +4 | Fires on the same domains as `name.vetted_suffix`, 100% agreement | One fact scored in two dimensions, clearing both clamps instead of one. Now paid once, in the name dimension. |
 | `age.long_term`, +5 | 41 families; removal took 10 abuse domains out of a legitimate band at no cost | Bulk registrars discount multi-year terms, so paying years ahead is as available to someone buying a hundred names as to someone buying one. |
 | `configuration.public_registrant`, +3 | 58 families; removal took 2 abuse domains out of a legitimate band at no cost | Redaction is now close to universal among the small businesses this rewarded, so the unredacted population is no longer the population the reasoning assumed. |
-| `configuration.hosted_service`, +4/+2 | 11 families, on more legitimate domains than abuse, no interval either way | Barely reachable, and dependent on DNS fingerprints that stop matching silently when a platform changes its custom-domain target. It was the only reader of the platform table and the apex CNAME lookup, so this removal retires a second network request. |
+| `configuration.hosted_service`, +4/+2 | 11 families, on more legitimate domains than abuse, no interval either way | Barely reachable, and dependent on DNS fingerprints that stop matching silently when a platform changes its custom-domain target. It was the only reader of the platform table and the apex CNAME lookup, so this removal retires a second network request. **Superseded in `1.6.0` by `site.hosted_platform`**, which asks whether the platform answered from its own address space rather than where a CNAME points, and costs no request at all. |
 | `site.robots_txt`, +2 | 721 families, 19% of abuse against 26% of legitimate, lift interval reaching 1.00; removal took 24 abuse domains out of a legitimate band at no cost | Parking pages and bulk hosting templates ship a robots file by default, so it measures the hosting stack rather than intent. This one also retired a network probe: the site collector no longer requests the file. |
 
 ### Dropped in 1.3.0, on the verification rule rather than on a measurement
@@ -576,7 +740,7 @@ it names, and so each was free for an account farmer to mint. On the holdout mos
 | Removed | Was | Why it cannot be verified |
 | --- | --- | --- |
 | `footprint.saas_vendors` | +12 | The census matches a TXT prefix. No vendor publishes any way to confirm a token it issued, so an invented string counts the same as a real one and five of them reached the top tier. |
-| `mail.bimi` | +8 | The rationale priced a purchased Verified Mark Certificate; the collector checked that a record began with `v=BIMI1`. Confirming it means fetching the certificate and checking its issuer against a Mark Verifying Authority, which is a network request for a signal already below the audit's rarity gate. |
+| `mail.bimi` | +8 | The rationale priced a purchased Verified Mark Certificate; the collector checked that a record began with `v=BIMI1`. Confirming it means fetching the certificate and checking its issuer against a Mark Verifying Authority, which is a network request for a signal already below the audit's rarity gate. **Reinstated in `1.6.0`** with the certificate fetched and verified, behind the enforcing-DMARC policy the specification requires — and at zero, because a census confirmed the rarity this row predicted: 1 certificate across 4,698 domains. |
 | `footprint.business_services` | up to +6 | A CNAME pointing at a vendor requires no account with that vendor, and `_caldav._tcp` and `_sip._tls` were credited for pointing anywhere at all. |
 | `footprint.dkim` | +4 | Only the DNS half of signing is observable and that half is free: generating a keypair and publishing the public half is one command, and nothing establishes that a message was ever signed with it. |
 | `mail.paid_spf_senders` | +3 | An SPF `include:` is a string. The platform is not consulted, and authorising a sender you have no account with costs nothing and breaks nothing. |
@@ -604,6 +768,12 @@ credits. Together they were a third of all DNS work: 21.7 queries per analysis d
 and 14.7 as since measured on transcripts the new collectors produced. That table had also been quietly
 failing — `enterpriseregistration.windows.net` is what that probe returns and it matched no pattern in the
 table, so 36 of 4,760 transcripts were paying for an answer the classifier discarded.
+
+The BIMI half of that was reversed in `1.6.0`, and the reasoning survives the reversal intact. The rule
+is that a round trip has to be paid for by a fact that can move a verdict, and in `1.3.0` the fact could
+not, because nothing checked it. The query is back because the certificate behind it is now fetched and
+verified, and it runs only behind an enforcing DMARC policy — 5.5% of analyses — rather than on every
+one. The business-service queries stay gone, since nothing about them changed.
 
 Also trimmed rather than removed: `configuration.record_breadth` no longer counts SPF, DKIM, vendor
 verification or business-service records among its classes. Three of those four were simultaneously
@@ -643,6 +813,22 @@ which is a property of the evidence rather than of the model: the port-43 regist
 creation date for 192 domains, and age is the heaviest dimension there is. `docs/CALIBRATION.md` separates
 the two effects by scoring the identical model against both collections.
 
+### Dropped in 1.5.0, back to measurement
+
+Two entries, and the first of them closes out the dimension the 1.3.0 table above emptied.
+
+| Removed | Measured | Why |
+| --- | --- | --- |
+| `footprint.dnssec`, +3 | 185 families, 5% of abuse against 6% of legitimate, lift interval 0.94–1.02 spanning 1.00, ΔAUC interval spanning zero; removal left AUC unchanged and took 2 abuse domains out of a legitimate band at no cost. Per domain it reverses, to 16% of abuse against 6% of legitimate | Flat, and not a verification failure — this is the one credit in the dimension the resolver actually validated. It reads the registrar rather than the registrant: 47% of `.cfd` and 39% of `.id` domains are signed against 4% of `.com`, because the cheap bulk registrars enable DNSSEC by default. Still collected and reported as an observation, since the `AD` flag arrives on a query made anyway. |
+| `combo.wildcard_mx_young_no_site`, 0 | Swept over 5 folds at 0, -5, -10, -15, -20; zero in all five, both before and after the signal beside it was weighted. Fires on 1% of abuse and 0% of legitimate domains | Youth and an absent site are already charged by `age.first_seen` and `site.substantive_content`, so this was a third charge for facts already paid for. Shipped at zero for one audit on the argument that a visible uncharged conjunction informs a reader; on 1% of domains, contributing nothing, it did not. |
+
+The organisational-footprint dimension, its clamp and its label went with the first of these rather than
+being left as a row that sums to zero on every domain. That is the same rule the clamps section applies to
+a bound too wide to bind, read one level up.
+
+This table also exists because the audit's tier rule did not propose the first removal until it was
+corrected; the `1.5.0` changelog entry describes the guard clause that was suppressing it.
+
 The fixture pair `modestNewBusiness` and `selfAssertedRecords` pins the result. Under the `1.2.0` weights,
 publishing the full set of free records moved a 60-day-old `.com` from 51 to 83, out of `unclear` and into
 `established`. Under `1.3.0` the same records move it by zero.
@@ -665,6 +851,90 @@ decide. The audit prints such cases as `KEEP bands disagree` rather than hiding 
 number was consulted first, and three signals currently carry that tier.
 
 ## Changelog
+
+### 1.6.0
+
+Reinstated the two signals removed for being unverifiable, with the verification actually performed, and
+placed both at zero because the holdout cannot price either.
+
+`mail.bimi` now fetches the Verified Mark Certificate and checks it: validity window, subject coverage of
+the domain, every chain link verified against its parent's key, and a key above the leaf pinned to a Mark
+Verifying Authority. The last check is the one that matters — a chain whose root merely *calls itself*
+DigiCert is a minute's work — and it is a committed fixture in the test suite rather than a claim. When a
+record fails, the reason is reported in words along with the specific finding, since an unexplained
+rejection reads as a broken checker.
+`site.hosted_platform` credits a platform that answered on address space the platform publishes for
+custom domains, read from a page and an address set the analysis already holds, so it costs no request.
+
+**Both ship at zero, on measurement.** A BIMI census across all 4,698 domains found 5 records and 1
+certificate; the platform credit reaches 6 domains, all legitimate, every one of which already saturates
+`clamps.site.max` through `site.substantiveContent`. Neither clears the ten-family rarity gate. A weight
+fitted to either would be fitted to a handful of named companies.
+
+Two findings came out of measuring rather than out of the plan. Squarespace is a registrar as well as a
+site builder, so a domain registered through it with no site attached is served a Squarespace parking
+page from Squarespace addresses — satisfying every test the platform credit applies while proving the
+opposite, which is why a parked page is now never read as a platform serving a domain. And the same
+parking page evades the parking fingerprints when its wording is localised: one abuse domain was serving
+it titled 近日中に公開 while three English-titled siblings were caught. The parking bundle's asset path is
+now matched instead, which is language-independent.
+
+The DNSSEC rationale was corrected across five places. It was described as measuring an operator's taste
+in DNS; unweighted it is on 16% of abuse domains against 6% of legitimate, and by suffix it is `.cfd` at
+47% and `.id` at 39% against `.com` at 4%. It tracked the registrar's default, not the registrant's
+effort. Two pieces of shipped copy that told the reader every observation is self-asserted were corrected
+with it, since a validated DNSSEC chain is corroborated by the resolver.
+
+One TXT query was added behind an enforcing DMARC policy, which opens on 5.5% of analyses, plus one
+conditional certificate fetch on roughly one analysis in nine hundred. `docs/SOURCES.md` carries the
+arithmetic.
+
+### 1.5.0
+
+Added three signals aimed at one measured failure: the throwaway-inbox MX fingerprint matched none of the
+123 holdout rows labelled `DISPOSABLE`. `signup.temp_mail_endpoint` resolves an in-zone mail exchanger and
+matches its address against endpoints the providers publish; `signup.disposable_token` reads a provider
+ownership token out of the apex TXT set; `signup.wildcard_mx` asks whether the zone answers with mail
+exchangers for names nobody created. The first two are priced by reading `signup.tempMail` rather than by
+weights of their own, since each is the same claim reached differently.
+
+**The gap did not close, and that is the headline.** After a full re-collection the `disposable` flag
+still reaches none of the 123. The two disposable-equivalent signals fired on no holdout domain at all,
+which makes them unfalsified rather than validated; both are kept because each costs one conditional
+lookup or none, and because the only way to make them fire on this holdout would be to fit their tables to
+it. `docs/CALIBRATION.md` carries the full result.
+
+`signup.wildcardMx` was placed at -12 by a five-fold sweep stratified over families and entered at zero, so
+that every candidate was judged against shipping nothing. All five folds chose it, and out of sample it
+admits no further legitimate domain to an actionable band. It is nonetheless the model's clearest
+ranking-versus-bands disagreement — its lift interval spans 1.00 and it fires on more legitimate families
+than abuse ones — and the section above records why it ships anyway.
+
+Two DNS queries were added per domain that has mail, and one more for the minority whose mail exchanger
+names its own zone. `docs/SOURCES.md` carries the per-analysis arithmetic.
+
+**Two removals, and a fix to the rule that should have proposed one of them.**
+
+`footprint.dnssec`, +3, went on the measurement in the table below, taking the organisational-footprint
+dimension with it — it was the last signal in it, and a dimension with no signals sums to zero on every
+domain while still rendering a row. DNSSEC is still collected and reported as an observation, because the
+`AD` flag rides along on an address query that happens anyway. `combo.wildcard_mx_young_no_site` went
+because a conjunction contributing nothing on 1% of abuse domains does not earn a registry entry, a config
+key and a sweep knob.
+
+The audit did not propose the first of those, and the reason was a bug in its own tier rule worth
+recording. The `REMOVE flat` branch skipped any signal whose removal moved band counts *in either
+direction*. That guard exists so the bands can overrule the ranking when a removal would cost verdicts,
+which is the model's stated policy; applied symmetrically it also spared signals whose removal *gained*
+verdicts, which is the opposite of the policy. It had been quietly protecting the one class of signal
+there is least reason to keep: measured, indistinguishable from random, and mildly harmful at the
+boundary. The branch now reads the signed band cost, and with that corrected the rule marks
+`footprint.dnssec` and nothing else. After both removals it marks nothing at all.
+
+This release is also the first measurement of the port-43 widening shipped in `1.4.0`, and it did what it
+was added for. RDAP answered 325 fewer domains than on the previous collection, ordinary registry
+variance, and WHOIS recovered 319 of them; total age coverage held flat at 81% where it would otherwise
+have fallen by 7 points. The trigger is insurance, and it paid out on its first run.
 
 ### 1.4.0
 

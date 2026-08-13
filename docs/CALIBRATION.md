@@ -1,24 +1,29 @@
 # Calibration
 
-Every figure below comes from a single collection of the whole holdout on 13 August 2026 and the two
-offline runs over it described under "Reproducing", so all of them are reproducible from the same
-stored responses. **The model was at `1.3.0` when that collection was scored; the current model is
-`1.4.0`.** This document is therefore a dated report rather than a description of what ships, and it is
-not rewritten in place when the model moves — a measurement is only meaningful with the version it was
-taken against. Regenerate it with `npm run audit` when the numbers need to be current.
+The headline figures below — measured separation, the signal tiers, the threshold sweep and the flag
+rates — come from a collection of the whole holdout taken on 13 August 2026 and scored at model `1.6.0`,
+reproducible offline from the stored responses as described under "Reproducing". The `1.6.0` signals were
+measured against that same collection: `site.hosted_platform` by re-deriving facts from the stored
+responses, and `mail.bimi` by a separate one-query census, for the reasons under "Pricing the 1.6.0
+signals" below.
 
-Three things have changed since, none of them priced here:
+**Not every section is from that collection**, and each one that is not says so at its heading. This
+document is a dated report rather than a description of what ships, and older sections are left standing
+rather than rewritten, because a measurement is only meaningful alongside the version and the collection
+it was taken against. Regenerate the current figures with `npm run audit` and `npm run calibrate`.
 
-- **`signup.checkmail`**, added in `1.4.0`, is unmeasurable against this holdout by construction. The
-  section "One signal is unmeasurable by construction" below sets out why and what it costs.
-- **The port-43 lookup has been widened** to run wherever RDAP produced no answer, rather than only
-  where a suffix publishes no RDAP service at all, so the registration coverage below is what the
-  narrower trigger achieved. See `docs/SOURCES.md`.
-- **The eight zero-weight signals became observations** in `1.4.0`. They scored nothing then and score
-  nothing now; what changed is that they are no longer in the registry the audit iterates, so a rerun
-  will report 23 signals rather than 31 and the "zero by design" tier will be empty of them. Nothing
-  about the measured separation moves, because a signal contributing zero points contributed zero to
-  every figure in this document. See `lib/scoring/observations.ts`.
+Two things remain unmeasured here, both by construction rather than by omission:
+
+- **`signup.checkmail`** reads a metered source that `lib/analyze.ts` excludes from every recorded and
+  replayed run, so every figure against it reads zero. The section "One signal is unmeasurable by
+  construction" below sets out what that costs.
+- **`signup.temp_mail_endpoint` and `signup.disposable_token`**, added in `1.5.0`, fired on no holdout
+  domain at all. They are unfalsified rather than validated, and "The recall gap after `1.5.0`" below is
+  the fullest statement of what this benchmark can and cannot say about them.
+
+A third belongs beside them from `1.6.0`: **`mail.bimi` and `site.hosted_platform` are both too rare here
+to price**, at 1 and 6 qualifying domains respectively. Unlike the two above they did fire, so what is
+missing is quantity rather than any evidence at all. Both ship at zero.
 
 ## The holdout
 
@@ -171,6 +176,10 @@ Two things a replayed run cannot recover, both reported rather than papered over
 
 ### What the collection cost, and what it recovered
 
+The figures in this subsection are from the `1.3.0`-era collection, which is where the port-43 collector
+was first measured at all. The current collection is described in the subsection after it, and the two are
+compared there directly.
+
 The whole holdout took 19 minutes at a concurrency of 8. Throttling was effectively absent, at 19 of 4,415
 domains on RDAP and 3 on WHOIS, against a `1.2.0` collection whose RDAP success fell from 87% to 65% as it
 scaled and needed a repair pass at a concurrency of 4 to reach 68%. Retiring a third of the DNS work is
@@ -213,24 +222,77 @@ measurement. It is now a timeout problem rather than a coverage one, which is th
 fixes — and, since this collection was taken, the kind the widened port-43 trigger is meant to fix
 outright. Whether it does is unmeasured until the holdout is collected again.
 
+### What the widened port-43 trigger was worth, measured
+
+The re-collection for `1.5.0` is the first run in which WHOIS was attempted wherever RDAP produced no
+answer, rather than only where a suffix publishes no RDAP service. Both collections are of the same 4,699
+domains, taken fourteen hours apart, and the second took 21 minutes at a concurrency of 8 with WHOIS
+reporting rate limiting on 1% of domains and RDAP on none — so the tighter port-43 limits, which were the
+reason for caution, did not bind at this size.
+
+| Source of the creation date | Before the widening | After |
+| --- | --- | --- |
+| RDAP | 3,478 (74%) | 3,153 (67%) |
+| WHOIS | 377 (8%) | 696 (15%) |
+| **Any source** | **3,820 (81%)** | **3,802 (81%)** |
+
+Read the middle column first, because the flat total conceals the result rather than being it. RDAP
+answered **325 fewer** domains on the second run — ordinary variance in how quickly registries reply, of
+the same kind the previous collection saw in the other direction — and port 43 recovered **319 of them**.
+Under the narrow trigger those 325 domains would simply have had no age at all, and age is the heaviest
+dimension in the model by a factor of six.
+
+So the widening is insurance rather than coverage, and it paid out on the first run it was exposed to. It
+adds nothing when RDAP is healthy and holds the line when RDAP is not, which is exactly the shape claimed
+for it when it shipped unmeasured in `1.4.0`. The two protocols fail independently; the flat total is the
+evidence that they do.
+
 ## Measured separation
 
 Scoring `legitimacy`, where higher is more legitimate:
 
 | Label | Group | n | median | mean | p10 | p90 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ABUSE` | Abuse | 4,292 | 21 | 25.9 | 0 | 53 |
-| `DISPOSABLE` | Abuse | 123 | 15 | 18.9 | 0 | 45 |
-| `LEGITIMATE` | Legitimate | 212 | 70 | 67.8 | 46 | 88 |
-| `PRIVACY` | Not graded | 58 | 13 | 23.2 | 0 | 66 |
+| `ABUSE` | Abuse | 4,292 | 19 | 23.3 | 0 | 53 |
+| `DISPOSABLE` | Abuse | 123 | 13 | 18.7 | 0 | 45 |
+| `LEGITIMATE` | Legitimate | 212 | 70 | 66.7 | 46 | 89 |
+| `PRIVACY` | Not graded | 58 | 13 | 22.8 | 0 | 59 |
 
-Separation between the abuse and legitimate medians is **49 points**. Ranked by risk,
-abuse-versus-legitimate AUC is **0.939**, family-weighted, over 4,415 abuse against 212 legitimate
-domains.
+Separation between the abuse and legitimate medians is **51 points**. Ranked by risk,
+abuse-versus-legitimate AUC is **0.943**, family-weighted, over 4,415 abuse against 212 legitimate
+domains. Band errors are 7 legitimate domains in an actionable band (3%) and 207 abuse domains in a
+legitimate band (5%).
 
 Thirteen domains are absent from the table because they were never scored: two abuse rows rejected as
 malformed input, and eleven legitimate rows ruled `out_of_scope` as shared free provider vanity domains,
 which is the gate working rather than a failure to score them.
+
+### What the `1.5.0` collection was worth, separated from the model change
+
+The same discipline as the section below it, applied to the same question one release later: the identical
+`1.5.0` model was scored against both the pre-widening collection and the fresh one, so that new evidence
+and new weights can be told apart. The third column then ablates the one weight `1.5.0` placed, which
+separates the two halves of the change completely.
+
+| | `1.4.0` evidence | `1.5.0` evidence, `wildcardMx` at 0 | `1.5.0` evidence and weight |
+| --- | --- | --- | --- |
+| Legitimate domains in an actionable band | 8 (3.8%) | 7 (3.3%) | 7 (3.3%) |
+| Abuse domains in a legitimate band | 219 (5.0%) | 216 (4.9%) | 209 (4.7%) |
+| Best separating threshold, Youden J | 0.691 | — | 0.679 |
+| AUC | — | 0.944 | 0.943 |
+
+Read across: re-collecting recovered one legitimate domain and three abuse ones, which is the port-43
+widening and ordinary run-to-run movement together and is not large. The `wildcardMx` weight then
+recovered seven more abuse domains at no cost in the other direction — the whole of its contribution, and
+the reason it ships despite ranking slightly worse with it than without.
+
+The two ranking figures moving the wrong way while the band figures move the right way is the honest
+statement of what this weight is. It is not an argument the weight is free; it is the argument that the
+service ships bands and the bands improved. A reader who prefers ranking has the number to act on.
+
+The baseline collection those first-column figures came from has since been deleted. It was 50 MB of
+transcripts whose only remaining purpose was this table, and a stale collection cannot answer a question
+about the current collectors — which is the reason it was re-taken.
 
 ### What the fresh collection was worth
 
@@ -296,24 +358,40 @@ Band boundaries are positioned on the measured crossover rather than chosen for 
 
 | Floor | Abuse below it | Legitimate at or above it | Youden J |
 | --- | --- | --- | --- |
-| 40 | 67.3% | 96.2% | 0.636 |
-| 44 | 71.7% | 95.3% | 0.670 |
-| 48 | 74.0% | 87.7% | 0.618 |
-| 52 | 79.3% | 76.4% | 0.557 |
-| **55** | **94.2%** | **74.1%** | **0.683** |
-| 56 | 94.6% | 73.6% | 0.682 |
-| 60 | 96.1% | 67.5% | 0.635 |
-| 64 | 97.0% | 63.7% | 0.606 |
+| 40 | 70.0% | 96.7% | 0.667 |
+| 44 | 73.6% | 94.3% | 0.679 |
+| 48 | 75.9% | 85.4% | 0.613 |
+| 50 | 79.4% | 84.4% | 0.639 |
+| **51** | **93.3%** | **75.0%** | **0.683** |
+| 52 | 93.5% | 74.1% | 0.675 |
+| 55 | 95.3% | 71.2% | 0.665 |
+| 56 | 95.7% | 70.8% | 0.665 |
+| 60 | 96.8% | 64.2% | 0.609 |
+| 64 | 97.5% | 61.8% | 0.593 |
 
-The configured floor of 55 is still where the two distributions cross, at a Youden J of 0.683 against
-0.684 for the best available threshold one point below it. The cliff that put it there is still visible:
-recall jumps 15 points between 52 and 55.
+The cliff that placed this edge is still the dominant feature of the sweep, and under `1.5.0` it has
+sharpened rather than moved: recall jumps 14 points between a floor of 50 and one of 51, in a single
+point. What changed is which side of the cliff the best Youden J now sits on. It is 51, at 0.683 against
+0.665 for the configured 55, where the two were within 0.001 of each other before.
 
-That this edge did not move is the most informative single fact in this document. It was 58 under `1.0.0`,
-followed the distribution to 55 in `1.1.0`, and has now held through a twentyfold increase in the abuse
-sample, every removal in `1.2.0`, a change in `1.3.0` that took the top off the legitimate distribution,
-and a complete re-collection of the holdout. A boundary that survives that is positioned on something
-real.
+The floor stays at 55, because Youden J is not the objective this model ships. It weights the two error
+rates equally, and the classes here are not equal sizes: dropping the floor to 51 would move 8 legitimate
+domains into a legitimate band and 88 abuse domains along with them, taking abuse in a legitimate band
+from 4.7% to roughly 6.7% and out of the budget every version of this model has been tuned inside. The
+gain is 3.8 points of a rate on 212 domains; the cost is 2.0 points of a rate on 4,415. A floor placed on
+the ranking metric would take that trade and the shipped bands should not.
+
+Nothing else recommends 51 either. It is one point past a cliff, which is the least stable place on a
+sweep to stand — 50 scores 0.639 and 52 scores 0.675 — and band edges are not carried through the
+cross-validated procedure the weight knobs are, so there is no out-of-fold evidence that this peak
+survives a different split.
+
+That this edge has not moved is still the most informative single fact in this document. It was 58 under
+`1.0.0`, followed the distribution to 55 in `1.1.0`, and has now held through a twentyfold increase in the
+abuse sample, every removal in `1.2.0`, a change in `1.3.0` that took the top off the legitimate
+distribution, a complete re-collection of the holdout, and the weights `1.5.0` added. A boundary that
+survives that is positioned on something real, and the first sweep to prefer a different number prefers
+it by 0.018 of a metric this service does not ship.
 
 The other three edges all moved in `1.3.0`, because the legitimate distribution lost its top: its ninetieth
 percentile fell from 100 to 88 and its median from 80 to 70. Bands drawn for a scale an ordinary business
@@ -322,11 +400,16 @@ leaving the old `established` floor of 80 reachable by 29% of legitimate domains
 
 | Band | Range | Of abuse | Of legitimate |
 | --- | --- | --- | --- |
-| `high_risk` | 0–18 | 39.3% | 1.4% |
-| `suspicious` | 19–39 | 28.0% | 2.4% |
-| `unclear` | 40–54 | 26.9% | 22.2% |
-| `probably_legitimate` | 55–69 | 4.2% | 21.7% |
-| `established` | 70–100 | 1.5% | 52.4% |
+| `high_risk` | 0–18 | 49.9% | 1.9% |
+| `suspicious` | 19–39 | 20.0% | 1.4% |
+| `unclear` | 40–54 | 25.3% | 25.5% |
+| `probably_legitimate` | 55–69 | 3.2% | 21.7% |
+| `established` | 70–100 | 1.4% | 49.5% |
+
+The abuse half moved down *within* the actionable range under `1.5.0` rather than further into it.
+`high_risk` took 39.3% of abuse domains at `1.4.0` and now takes 49.9%, while `suspicious` fell from
+28.0% to 20.0%; the two together moved by under three points. Which weight did that is not isolated here,
+and the ablations below report each one's effect on ranking rather than on band membership.
 
 `high_risk` is configured at exactly 18, which the run confirms is precisely where it stops taking more
 than 2% of legitimate domains: the sweep reports 18 as the highest ceiling available and 18 is what is
@@ -335,7 +418,7 @@ being wrong means blocking somebody real. `established` would need a floor of 67
 its own class and is configured at 70, keeping three points of conservatism.
 
 The ceiling on the actionable bands, at 39, is the one edge positioned by the false-positive budget rather
-than by separation. 3.8% of legitimate domains fall below 40, which is inside the 5% this model has always
+than by separation. 3.3% of legitimate domains fall below 40, which is inside the 5% this model has always
 been tuned to, and holding the old ceiling of 49 would have taken far more.
 
 The lower edge of `unclear` is therefore no longer pinned to the neutral base of 50. What the pin
@@ -347,9 +430,9 @@ What the bands produce:
 
 | Outcome | Abuse (n=4,415) | Legitimate (n=212) |
 | --- | --- | --- |
-| Actionable band (`high_risk` or `suspicious`) | 67.3% | 3.8% |
-| `unclear` | 26.9% | 22.2% |
-| Legitimate band | 5.7% | 74.1% |
+| Actionable band (`high_risk` or `suspicious`) | 70.0% | 3.3% |
+| `unclear` | 25.3% | 25.5% |
+| Legitimate band | 4.7% | 71.2% |
 
 The trade is deliberate. Blocking a real user is the expensive error, so the actionable ceiling is placed
 where false positives on legitimate domains stay near or below 5%, which is where every version of this
@@ -392,6 +475,45 @@ Three results carry most of the design decisions:
   fingerprint: the reputation source is excluded from collection, so nothing here reflects what the
   widened flag does in production. See *One signal is unmeasurable by construction* below.
 
+### The recall gap after `1.5.0`, which attacked it directly and did not close it
+
+`1.5.0` added three signals aimed squarely at the row above, on the reasoning that the gap is structural:
+the throwaway-inbox services that sell custom domains instruct the customer to publish a mail exchanger
+*inside their own zone*, so the hostname names the customer and a table of provider hostnames cannot see
+them however long it grows. The holdout was then re-collected in full so all three could be measured.
+
+**The flag still reaches none of the 123.** The result, family-weighted:
+
+| Signal | Families | Abuse | Legitimate | Lift | ΔAUC | Band delta |
+| --- | --- | --- | --- | --- | --- | --- |
+| `signup.temp_mail` | 4 | 0% | 0% | 0.54–1.06 | +0.000 | +0/+1 |
+| `signup.temp_mail_endpoint` | 0 | 0% | 0% | — | +0.000 | +0/+0 |
+| `signup.disposable_token` | 0 | 0% | 0% | — | +0.000 | +0/+0 |
+| `signup.wildcard_mx` | 124 | 3% | 5% | 0.91–1.01 | -0.001 | +0/+7 |
+
+The two signals built to reach the disposable population fired on **no holdout domain at all**, so they
+are unfalsified rather than validated, and nothing here says whether they work. Both are kept. The cost of
+each is bounded — one conditional address lookup for the first, a read of an already-fetched record for
+the second — and a fingerprint that has not yet met its population is a different state from one measured
+and found flat. What must not happen is the obvious repair: fitting the endpoint or token tables to these
+123 rows would derive them from the benchmark and make every subsequent figure circular, which is the same
+rule that keeps the MX table built from provider documentation alone.
+
+The wildcard probe did reach the population, and it says something the design did not expect. A wildcard
+MX is **more common among the legitimate half of this holdout than the abuse half** — 5% of legitimate
+families against 3% of abuse — and on the `DISPOSABLE` group specifically it added nothing at all:
+`catch_all_capable` covered 64% of those rows before the probe existed and 64% after. Mail-server
+operators publish wildcards so that departmental names keep working, and that turns out to be at least as
+common as an operator publishing one to farm addresses. The signal ships at -12 regardless, on band
+errors rather than on ranking; the entry in `docs/SCORING.md` sets out that argument and this table is the
+evidence against it.
+
+What the whole exercise establishes is narrower than what it set out to do, and worth stating plainly: the
+custom-domain disposable population is reachable in principle by address and by token, and this holdout
+cannot tell whether either mechanism works, because the 123 rows in it do not use the one provider whose
+endpoint and token are published. Closing that would need a labelled set drawn from the services
+themselves rather than more signals.
+
 One row is a description rather than an accusation. **No inbound mail scores nothing in either
 direction**, so its 26%-against-2% split moves no domain's number. It reads like a risk signal and is
 not one: an account farmer has to receive the verification message, so the domains it selects are
@@ -411,17 +533,165 @@ Conditional lift is the third figure, and it is the one that protects a rare sig
 signal fired on, the abuse share against the cohort base rate, with a Wilson interval. A signal that fires
 twelve times cannot show a ΔAUC, but it can still show that everything it fired on was legitimate.
 
-The 30 signals and 7 combinations of `1.3.0` tier as follows. Eight of those signals are observations
-from `1.4.0` and a rerun will not list them:
+The 25 signals and 7 combinations of `1.5.0` tier as follows, after the two removals described below:
 
 | Tier | Signals | Combinations | Meaning |
 | --- | --- | --- | --- |
 | Measurably useful | 8 | 2 | ΔAUC interval excludes zero on the useful side |
-| Kept, not distinguishable | 9 | 3 | Fires enough to judge, and the intervals do not separate it from noise, but nothing indicates harm |
-| Bands disagree | 3 | 0 | Removing it would raise AUC and cost verdicts; the bands decide |
-| Unmeasured | 2 | 1 | Below the 10-family rarity gate, so no figure means anything yet |
-| Zero by design | 8 | 0 | Reports to the reader and scores nothing |
-| `REMOVE` | 0 | 1 | The rule marks it for removal |
+| Kept, not distinguishable | 8 | 3 | Fires enough to judge, and the intervals do not separate it from noise, but nothing indicates harm |
+| Bands disagree | 4 | 1 | Removing it would raise AUC and cost verdicts; the bands decide |
+| Unmeasured | 4 | 1 | Below the 10-family rarity gate, so no figure means anything yet |
+| No data | 1 | 0 | The source is excluded from collection by construction |
+| `REMOVE` | 0 | 0 | The rule marks it for removal |
+
+Two movements since `1.3.0` are worth naming. The "zero by design" tier is gone, because the eight
+entries that filled it became observations in `1.4.0` and the audit no longer lists them. And the
+`REMOVE` row is empty because the two entries that filled it have been removed rather than argued with,
+which is the first time that has been the reason.
+
+Three of the four unmeasured signals are the disposable family, two of which fired on nothing at all.
+That tier is doing exactly the job it was built for — recording that a signal has no evidence either way,
+rather than letting a zero read as a verdict. **Nothing in that tier was removed, and the distinction is
+the whole reason the tier exists**: a signal that has not met its population is not the same as one
+measured and found flat, and deleting on the first would be fitting the holdout. `signup.disposable_token`
+costs no query at all, and `signup.temp_mail_endpoint` costs one conditional lookup on the 362 of 4,699
+domains whose mail exchanger names its own zone — 7.7% of the population, or 0.08 queries per analysis
+against a fan-out of about 15.
+
+### Two removals, and the guard clause that was hiding one
+
+`footprint.dnssec` was removed, and the organisational-footprint dimension went with it as its last
+member. It fired on 185 families, 5% of abuse against 6% of legitimate, with a conditional lift interval
+of 0.94–1.02 spanning 1.00 and a ΔAUC interval spanning zero. Removing it left AUC unchanged at 0.943 and
+moved band errors from 7/209 to 7/207 — two abuse domains out of a legitimate band, no legitimate domain
+into an actionable one.
+
+It is worth being precise about why this one is different from the nine removed in `1.3.0`. Those failed
+the verification rule and were removed *despite* measuring useful, because a string a domain publishes
+about itself is free to mint whatever this holdout says. `footprint.dnssec` passes that rule outright: the
+resolver validated the chain to the root. It was removed on the ordinary evidence.
+
+**Unweighted, it does not merely fail to separate the classes — it reverses.** 16% of abuse domains are
+signed against 6% of legitimate ones. The suffix breakdown shows what the credit was actually reading:
+
+| Suffix | Domains | Signed | Legitimate rows |
+| --- | --- | --- | --- |
+| `.cfd` | 49 | 47% | 0 |
+| `.id` | 1,548 | 39% | 5 |
+| `.org` | 87 | 8% | 18 |
+| `.net` | 71 | 6% | 7 |
+| `.com` | 751 | 4% | 76 |
+
+Signing is concentrated in the cheap bulk namespaces whose registrars enable DNSSEC by default, and those
+are exactly where the generated abuse families live. Family weighting collapses each of those families to
+one count, which is why the audit reports a level 5%/6% rather than a reversed 16%/6% — the weighting is
+working as designed, and the unweighted figure is the one that explains the finding rather than the one
+that should price it. On `.com` and `.org`, where enabling DNSSEC is still a decision somebody makes, the
+rates match ordinary gTLD adoption and almost nobody makes it.
+
+The credit was therefore reading the registrar's default rather than the registrant's effort. The fact is
+still collected and reported as an observation, since the `AD` flag arrives on a query made anyway. It is
+the only observation there for being measured flat rather than for being self-asserted, and a
+better-balanced collection could reverse it — though the mechanism found here is not the sort a different
+sample fixes, since one-click enablement is a property of the registrar market rather than of this
+holdout.
+
+`combo.wildcard_mx_young_no_site` was removed as well. It shipped at zero points in this same version and
+stayed at zero across all five folds in two separate sweeps. Firing on 1% of abuse domains and 0% of
+legitimate ones while contributing nothing, it did not earn a registry entry, a config key and a sweep
+knob.
+
+**The audit did not propose the first removal until its own rule was corrected**, and the fault is worth
+recording because it was silent and directional. The `REMOVE flat` branch skipped any signal whose removal
+changed band counts *in either direction*. That guard implements the policy stated below — where ranking
+and bands disagree, the bands win — but that policy is about removals which *cost* verdicts. Applied
+symmetrically it also spared signals whose removal *gained* them, which is the opposite of the policy, and
+it had been quietly protecting the one class of signal there is least reason to keep: measured,
+indistinguishable from random, and mildly harmful at the boundary. The branch now reads the signed band
+cost. With the fix in place the rule marked `footprint.dnssec` and nothing else; after both removals it
+marks nothing at all, and every threshold knob still wins its own sweep.
+
+### Pricing the `1.6.0` signals, and why both ship at zero
+
+Two signals removed in earlier releases for being unverifiable came back with the verification actually
+performed. Both were priced before any weight was placed, by the cheapest method that could answer, and
+both came out at zero. Neither result is about the signals being wrong.
+
+**`site.hosted_platform` cost nothing to measure.** The stored responses already contain what it reads:
+2,873 site probes, 1,460 of them carrying response headers. Re-deriving facts with `--reparse` and
+re-running the audit priced it without a single new request.
+
+| Tier | Domains | Abuse | Legitimate |
+| --- | --- | --- | --- |
+| Served and addressed, paid platform — **the scored tier** | 6 | 0 | 6 |
+| Served only — reported as an observation | 3 | 1 | 2 |
+
+Six domains, no abuse among them, and a sweep entered at zero that chose zero in all five folds. Six
+families is below the ten-family rarity gate, and a weight fitted to six domains is fitted to those six
+domains. A second bound would have made it moot anyway: all six serve real websites — necessarily, since
+a platform is serving them — so `site.substantiveContent` at +6 has already reached the +6
+`clamps.site.max` before this is added, and every point of a credit would be clamped away. Raising the
+clamp was rejected, because the two credits are one fact seen twice.
+
+The useful output was a defect rather than a weight. **Squarespace is a registrar as well as a site
+builder**, and a domain registered through it with no site attached is served a Squarespace parking page,
+from Squarespace's own addresses, carrying `x-contextid` and `server: Squarespace`. That satisfies every
+test the scored tier applies while being the exact opposite of what the tier is meant to establish, and
+one abuse domain reached the tier that way. A parked page is now never read as a platform serving a
+domain: where a platform is also the registrar, serving proves nothing about a purchase.
+
+Finding that exposed a second, older gap. Of the four Squarespace parking pages in the holdout, three
+were caught by the `coming soon` body fingerprint and the fourth was not — it was titled 近日中に公開, the
+same page in Japanese. Every fingerprint in that list is an English phrase, so the list systematically
+misses localised parking pages. The parking bundle's asset path is now matched instead, which is
+language-independent, and the previously missed domain scores the parking penalty.
+
+**`mail.bimi` could not be measured from stored data at all**, since no `_bimi` lookup exists in any
+transcript — the query was removed in `1.3.0` along with the credit. Rather than re-collect the holdout,
+`scripts/bimi-census.mts` ran one TXT query per domain: 4,698 queries in about thirty seconds.
+
+| Group | Domains | BIMI record | With a certificate |
+| --- | --- | --- | --- |
+| Abuse | 4,417 | 1 | 0 |
+| Legitimate | 223 | 4 | 1 |
+| Privacy | 58 | 0 | 0 |
+
+Five records, one certificate. Three of the four legitimate records are Proton domains and so are one
+family, leaving three families in total. The single abuse record is `astermail.org`, publishing a BIMI
+record with no certificate behind it — which is exactly the shape the removed signal used to pay `+8`
+for, and a fair illustration of why it was removed. One qualifying domain cannot support a weight, so the
+census ended the question for the cost of thirty seconds rather than a full re-collection.
+
+That leaves the verifier unproven in the accepting direction, which the fixtures cannot fix: they are
+generated locally, and a verifier that rejected everything would pass all of them. `benchmark-bimi/`
+holds 42 large brands, kept out of `benchmark/` so that forty of the internet's biggest companies do not
+join a 212-family population of small businesses and flatter every figure in this document. Of those, 20
+served a chain and **16 verified** — across all three authorities, including a `GlobalSign Verified Mark
+Root R42` that the authority table had omitted until the set found it.
+
+The four rejections are worth reporting because none is a defect:
+
+| Domain | Certificate expired |
+| --- | --- |
+| `sendgrid.com` | 31 December 2025 |
+| `entrust.com` | 1 February 2026 |
+| `wellsfargo.com` | 26 July 2026 |
+| `zoom.us` | 11 August 2026 |
+
+Two of the four lapsed within three weeks of the run, and one of them belongs to a Mark Verifying
+Authority. VMCs are annual and evidently lapse often even at companies with the budget and the reason to
+renew them.
+
+That is why the query is kept despite the zero weight, and why the failure is reported as a sentence
+rather than a status. Every rejection here was correct, and a reader shown only that verification failed
+would reasonably have suspected the verifier in all four cases; shown "the certificate has expired — it
+expired on 11 August 2026", there is nothing left to wonder about. The same run also found
+`salesforce.com`, `tripadvisor.com` and three Proton domains publishing a BIMI record with no certificate
+at all — the shape the removed signal paid `+8` for, now reported as what it is.
+
+The trust anchors in `lib/data/bimi-authorities.ts` come from this set rather than from documentation.
+Eighteen unrelated brands chaining to one DigiCert key is an observation that it is a Mark Verifying
+Authority key; a fingerprint transcribed from a vendor page would be an act of faith in the page.
 
 ### One signal is unmeasurable by construction
 
@@ -463,34 +733,35 @@ Each owned the DNS queries that fed it, and a fact nothing weighs does not justi
 analysis, so both were deleted along with their probes. That is the test the tier applies: reporting the
 fact has to be free.
 
-One combination tiers as `REMOVE` and no signal does. `combo.parked_with_mx` measures -0.002 ΔAUC on an
-interval of -0.004 to -0.000, which just excludes zero, and it costs one band error in each direction. It
-was left alone because `1.3.0` already reprices most of the model, and removing a combination inside the
-same change would confound the two. It is the first thing to measure next, and it has now tiered `REMOVE`
-on two independent collections.
+`combo.parked_with_mx` is the entry that carried the `REMOVE` tier for two collections and no longer does.
+It measures -0.001 ΔAUC on an interval of -0.003 to -0.000, which still just excludes zero, so the ranking
+would drop it. The bands do not: removing it costs one verdict and gains none, so it now tiers as a
+bands-disagreement alongside three signals with the same shape. It is a genuine disagreement rather than a
+deferral, which is what it was when `1.3.0` left it alone to avoid confounding a removal with a repricing.
 
 By dimension, ablating the whole group:
 
 | Dimension | ΔAUC | 95% CI | At `1.2.0` |
 | --- | --- | --- | --- |
-| `age` | +0.061 | +0.050, +0.072 | +0.048 |
-| `signup` | +0.013 | +0.005, +0.022 | +0.005 |
-| `configuration` | +0.009 | +0.002, +0.015 | +0.011 |
-| `economics` | +0.004 | -0.000, +0.008 | +0.003 |
-| `mail` | +0.000 | -0.000, +0.001 | +0.006 |
+| `age` | +0.068 | +0.058, +0.081 | +0.048 |
+| `signup` | +0.010 | +0.002, +0.018 | +0.005 |
+| `configuration` | +0.008 | +0.002, +0.013 | +0.011 |
+| `economics` | +0.005 | +0.001, +0.009 | +0.003 |
+| `mail` | +0.001 | +0.000, +0.001 | +0.006 |
 | `name` | +0.000 | -0.000, +0.001 | +0.000 |
-| `footprint` | -0.000 | -0.001, +0.001 | +0.000 |
-| `site` | -0.003 | -0.008, +0.001 | -0.005 |
+| `site` | -0.003 | -0.006, +0.001 | -0.005 |
+
+There are seven rows where there were eight. `footprint` is absent because it no longer exists: it
+measured -0.000 on an interval spanning zero across two collections while holding a single live signal,
+and both went in `1.5.0`. It had been kept on the argument in `docs/SCORING.md` rather than on a
+measurement, which is a defensible thing to do once and not twice.
 
 Age still carries the model, and by more than before, which is why registration coverage is the most
 consequential limitation here. `age` and `signup` both became more valuable: withdrawing the self-asserted
 credits did not only subtract, it stopped them crowding out the evidence that survives.
 
-`mail` and `footprint` both sit at nothing, as they had to. `footprint` holds one live signal,
-`footprint.dnssec`, whose own ΔAUC is -0.000 on an interval spanning zero; it is kept on the argument in
-`docs/SCORING.md` rather than on a measurement, and it is the smallest thing in the model still drawing
-points. `mail` has one live credit that twelve domains qualify for, which is not enough to move a
-dimension.
+`mail` sits at almost nothing, as it had to: it has one live credit that twelve domains qualify for, which
+is not enough to move a dimension.
 
 `site` still ablates negative and is still kept; see `docs/SCORING.md` for the reasoning and for the two
 other findings measured and deliberately not acted on.
@@ -535,21 +806,28 @@ measurement either way.
 
 ## Known limitations
 
-- **A third of the holdout has no age evidence.** A creation date was established for 68%, and age is the
-  strongest dimension in the model by a factor of six. The missingness is not random: it concentrates on
-  the suffixes abuse prefers. Every figure here is therefore a lower bound on what the model would do
-  against a population whose registries answer. The composition has changed, though: the port-43 collector
-  closed most of the no-RDAP slice, so what remains is 23% of domains where an RDAP server exists and
-  timed out. That 23% is what the widened port-43 trigger was built for, and it postdates this collection,
-  so the figure is the gap as it stood rather than as it stands.
-- **The temp-mail fingerprint matched none of the 123 rows labelled `DISPOSABLE`.** With the group
-  collected in full this is a recall gap rather than a sampling artefact, and closing it needs a broader
-  fingerprint table built from provider documentation. Fitting one to these 123 rows would make this
-  document circular.
+- **A fifth of the holdout has no age evidence.** A creation date was established for 81% on the `1.5.0`
+  collection, and age is the strongest dimension in the model by a factor of six. The missingness is not
+  random: it concentrates on the suffixes abuse prefers. Every figure here is therefore a lower bound on
+  what the model would do against a population whose registries answer. The widened port-43 trigger has
+  now been measured and it does not shrink this gap so much as stop it growing — it converts RDAP
+  failures into WHOIS answers rather than reaching domains neither protocol can.
+- **The `disposable` flag still reaches none of the 123 rows labelled `DISPOSABLE`, after a release spent
+  attacking it.** `1.5.0` added an address fingerprint and an ownership-token match aimed precisely at the
+  custom-domain shape that defeats hostname matching, re-collected the holdout, and both fired on zero
+  domains. The tables hold what the providers publish, and the 123 rows do not use those providers. This
+  is now the clearest limitation in the document: it is not a signal that was tried and failed, it is a
+  population this benchmark cannot speak to, and closing it needs a labelled set drawn from the services
+  themselves rather than more signals. Fitting either table to these 123 rows would make this document
+  circular, which is why it has not been done.
+- **`signup.wildcard_mx` fires more often on legitimate domains than on abuse ones.** It ships at -12 on
+  band errors, against a lift interval spanning 1.00 and a ΔAUC of -0.001. The bands are what the service
+  emits and they improve by seven domains at no cost in the other direction, but a reader who weights
+  ranking would reasonably reach the opposite decision, and the number to do so with is above.
 - **`mail.commercial_rua` is measured on twelve domains.** It is out of the "zero by design" tier and its
   conditional lift is unambiguous, but twelve is twelve. It sits above the rarity gate by two families,
   which is close enough to it that the next collection could put it below.
-- **Free mail routing drives nearly all of the false positives.** Six of the eight legitimate domains in a
+- **Free mail routing drives nearly all of the false positives.** Five of the seven legitimate domains in a
   risk band are there because `signup.free_routing` fired, usually alongside a parked page or a young
   registration. This is the one weight where the measured cost to legitimate domains is concentrated
   rather than spread, and the cross-validated sweep keeps it where it is, because the domains it recovers

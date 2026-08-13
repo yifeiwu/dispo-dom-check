@@ -99,6 +99,44 @@ export function countSaasVendors(txtRecords: readonly string[]): string[] {
 }
 
 /**
+ * The same mechanism as the table above, with the sign reversed.
+ *
+ * A throwaway-inbox service selling custom domains has the identical problem every SaaS vendor has: it
+ * must confirm the person configuring a domain controls it, and the cheapest proof is a token published
+ * in the apex TXT set. So these providers ask for one, and the record stays there for as long as the
+ * arrangement lasts.
+ *
+ * What makes it worth reading is that it survives everything else being disguised. A domain can be
+ * bought at any registrar, hosted anywhere and given a mail exchanger inside its own zone, and it will
+ * still be carrying a string naming the service it is enrolled with.
+ *
+ * This is a penalty, so the `1.3.0` rule limiting credits to what a third party confirms does not apply
+ * to it. That rule exists because a credit nothing can confirm is free to mint; a record that names the
+ * service the domain is enrolled with is not something an operator would mint about itself.
+ *
+ * Restricted to apex-visible tokens, which is a cost decision rather than a completeness one. Some
+ * providers put their token at a dedicated subdomain, and reading those means a DNS query on every
+ * analysis to look for a record almost no domain has. The apex TXT set is already fetched, so this
+ * whole table is free; the subdomain selectors stay out until something justifies the round trip, which
+ * is the test `docs/SCORING.md` applies to the rest of the zero-cost tier.
+ */
+export const DISPOSABLE_VERIFICATION_TXT: readonly { prefix: string; provider: string }[] = [
+  { prefix: 'tm-custom-domain-verification', provider: 'TempMail.lol' },
+];
+
+/** Disposable-mail providers named by a verification token in the apex TXT set. */
+export function matchDisposableVerification(txtRecords: readonly string[]): string[] {
+  const found = new Set<string>();
+  for (const raw of txtRecords) {
+    const record = raw.toLowerCase().replace(/^"|"$/g, '');
+    for (const { prefix, provider } of DISPOSABLE_VERIFICATION_TXT) {
+      if (record.startsWith(prefix.toLowerCase())) found.add(provider);
+    }
+  }
+  return [...found].sort();
+}
+
+/**
  * DMARC `rua` destinations belonging to commercial reporting vendors. Paying a vendor to process
  * aggregate reports is evidence of a real mail programme. Sophisticated operators frequently self-host
  * reporting instead, so this is a positive where present and never a negative where absent.
