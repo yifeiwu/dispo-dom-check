@@ -1,4 +1,5 @@
 import { COMBINATIONS } from '@/lib/scoring/combinations';
+import { OBSERVATIONS } from '@/lib/scoring/observations';
 import { SIGNALS, type WeightRange } from '@/lib/scoring/signals';
 import { VERDICT_DESCRIPTIONS, VERDICT_LABELS } from '@/lib/scoring/verdict';
 import { DEFAULT_CONFIG } from '@/lib/scoring/weights';
@@ -24,20 +25,11 @@ const magnitude = (weight: WeightRange): number =>
   Math.max(Math.abs(weight.min), Math.abs(weight.max));
 
 /**
- * What a heuristic is worth, and why a weight of zero is annotated rather than left to speak for itself.
- *
- * A signal weighted at zero is not one that happened to come out neutral for a domain: it is collected
- * and reported because the fact is worth seeing next to a verdict, and it deliberately moves nothing for
- * any domain. A bare `0` in a column of weights reads as the former, so it says which it is.
- *
- * The tier note goes with it. Nine credits were zeroed in 1.3.0 without their tiers being deleted, which
- * left two signals describing a range that no longer varies: `mail.dmarc_policy` still declares itself
- * scored "by how strict the policy is" and `footprint.saas_vendors` "by how many vendors", when both pay
- * the same nothing at every tier.
+ * What a heuristic is worth. Every signal in the registry moves a score, so there is no zero case to
+ * annotate here: the facts that are collected and never priced are observations, listed separately
+ * below, and they carry no weight to describe.
  */
 function describeWeight(weight: WeightRange): string {
-  if (weight.min === 0 && weight.max === 0) return '0 · reported, never scored';
-
   const range =
     weight.min === weight.max ? signed(weight.min) : `${signed(weight.min)} to ${signed(weight.max)}`;
   return weight.note ? `${range} · ${weight.note}` : range;
@@ -151,15 +143,6 @@ export default function HowItWorks() {
           it pays depends on how much of the thing it found. These are the points before the clamp above,
           which is why a dimension&rsquo;s heuristics can add up past its limit and be cut back to it.
         </p>
-        <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
-          The ones marked <span className="font-mono text-xs">reported, never scored</span> were
-          measured and then deliberately moved nothing. Most are records the domain publishes about
-          itself, which nothing can confirm and anyone can write, so they are shown as facts worth
-          seeing rather than paid for. The rest are observations whose two explanations point in
-          opposite directions, such as a suffix the reference price list does not carry, where saying so
-          is better than guessing either way. All of them are listed rather than hidden, because a
-          heuristic that pays nothing on purpose should be visibly distinct from one that never ran.
-        </p>
         {heuristics.map((group) => (
           <div key={group.dimension} className="space-y-2">
             <h4 className="text-sm font-medium text-ink-muted">
@@ -180,6 +163,29 @@ export default function HowItWorks() {
             </ul>
           </div>
         ))}
+      </section>
+
+      <section className="space-y-3">
+        <h3 className="text-base font-semibold">Collected, reported, never scored</h3>
+        <p className="max-w-3xl text-sm leading-relaxed text-ink-muted">
+          These are not heuristics with a weight of zero. They carry no weight at all, and there is no
+          number to set: an observation can only report what was seen. Most are records the domain
+          publishes about itself, which nothing can confirm and anyone can write, so paying for them
+          would price what an operator was willing to type. The rest are facts whose two explanations
+          point in opposite directions, such as a suffix the reference price list does not carry, where
+          saying so is better than guessing either way. They are shown beside every verdict because a
+          reader can weigh what the score will not, and their absence is never a penalty.
+        </p>
+        <ul className="space-y-3 rounded-lg border border-edge bg-surface-raised p-4">
+          {OBSERVATIONS.map((observation) => (
+            <li key={observation.id}>
+              <p className="text-sm font-medium">{observation.label}</p>
+              <p className="mt-0.5 text-sm leading-relaxed text-ink-muted">
+                {observation.rationale}
+              </p>
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section className="space-y-3">

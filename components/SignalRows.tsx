@@ -3,6 +3,7 @@
 import { useId, useState, type ReactNode } from 'react';
 import { DIMENSION_LABELS } from '@/lib/api-types';
 import type { CombinationResult } from '@/lib/scoring/combinations';
+import type { ObservationResult } from '@/lib/scoring/observations';
 import type { SignalResult } from '@/lib/scoring/signals';
 
 /**
@@ -13,8 +14,8 @@ import type { SignalResult } from '@/lib/scoring/signals';
  * verdict needs both to tell a wrong observation from a weight they would set differently.
  *
  * The rows are split three ways rather than listed together, because a heuristic that moved the score,
- * one that measured something and came out at zero, and one that never had anything to measure are
- * three different claims, and only the first is asking for the reader's attention.
+ * one that was reported without ever being scored, and one that never had anything to measure are three
+ * different claims, and only the first is asking for the reader's attention.
  */
 function Points({ points }: { points: number }) {
   const tone = points > 0 ? 'text-accent' : points < 0 ? 'text-danger' : 'text-ink-faint';
@@ -120,9 +121,9 @@ function Row({
 }
 
 /**
- * A group the reader opens only if they want it. Both the zero-scoring and the inapplicable
- * heuristics belong here: each is worth being able to audit and neither should compete for attention
- * with the rows that moved the score.
+ * A group the reader opens only if they want it. Both the unscored and the inapplicable heuristics
+ * belong here: each is worth being able to audit and neither should compete for attention with the
+ * rows that moved the score.
  */
 function Collapsible({
   summary,
@@ -158,17 +159,35 @@ function Collapsible({
 export function SignalRows({
   signals,
   combinations,
+  observations,
   inapplicable,
 }: {
   signals: SignalResult[];
   combinations: CombinationResult[];
+  observations: ObservationResult[];
   inapplicable: { id: string; label: string; rationale: string }[];
 }) {
-  // A heuristic that measured something and landed on neutral is a third state, between one that moved
-  // the score and one that never ran. Leaving it in its dimension made the sections read as though a
-  // fact had been weighed when nothing had been charged for it either way.
   const scoring = signals.filter((signal) => signal.points !== 0);
-  const neutral = signals.filter((signal) => signal.points === 0);
+
+  /*
+   * Everything that was measured and charged nothing, which is a third state between a heuristic that
+   * moved the score and one that never ran. Leaving these in their dimensions made the sections read as
+   * though a fact had been weighed when nothing had been charged for it either way.
+   *
+   * Two things land here for different reasons, and the tag says which. A heuristic that could have
+   * scored and came out at zero for this domain is a measurement; an observation is never scored for
+   * any domain, by construction. Both are worth auditing and neither is worth the reader's attention
+   * before the rows that decided the verdict.
+   */
+  const unscored = [
+    ...signals
+      .filter((signal) => signal.points === 0)
+      .map((signal) => ({
+        ...signal,
+        tag: DIMENSION_LABELS[signal.dimension] ?? signal.dimension,
+      })),
+    ...observations.map((observation) => ({ ...observation, tag: 'Never scored' })),
+  ];
 
   const byDimension = new Map<string, SignalResult[]>();
   for (const signal of scoring) {
@@ -220,22 +239,22 @@ export function SignalRows({
         </section>
       ))}
 
-      {neutral.length > 0 ? (
+      {unscored.length > 0 ? (
         <Collapsible
           summary={(open) =>
-            `${open ? 'Hide' : 'Show'} ${neutral.length} ${neutral.length === 1 ? 'heuristic' : 'heuristics'} that scored zero`}
-          description="These were measured and came out neutral. The observation is reported because it is evidence a reader may want, but it moved the score in neither direction."
+            `${open ? 'Hide' : 'Show'} ${unscored.length} ${unscored.length === 1 ? 'finding' : 'findings'} that did not move the score`}
+          description="Each of these was observed and charged nothing. Some are heuristics that measured something and came out neutral; those tagged “never scored” are facts the model reports but deliberately never prices, because the domain asserts them about itself and nothing corroborates them."
         >
           <ul className="mt-3 rounded-lg border border-dashed border-edge px-4">
-            {neutral.map((signal) => (
+            {unscored.map((entry) => (
               <Row
-                key={signal.id}
-                label={signal.label}
-                rationale={signal.rationale}
-                evidence={signal.evidence}
-                points={signal.points}
-                sourceUrl={signal.sourceUrl}
-                tag={DIMENSION_LABELS[signal.dimension] ?? signal.dimension}
+                key={entry.id}
+                label={entry.label}
+                rationale={entry.rationale}
+                evidence={entry.evidence}
+                points={0}
+                sourceUrl={entry.sourceUrl}
+                tag={entry.tag}
               />
             ))}
           </ul>

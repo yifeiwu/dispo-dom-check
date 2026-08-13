@@ -12,7 +12,7 @@
     "refresh:pricing": "node scripts/refresh-pricing.mjs",
     "refresh:whois": "node scripts/refresh-whois-servers.mjs",
     "probe": "node scripts/probe.mjs",
-    "calibrate": "tsx scripts/calibrate.mts",
+    "calibrate": "tsx scripts/signal-audit.mts --bands",
     "audit": "tsx scripts/signal-audit.mts"
   },
   "dependencies": {

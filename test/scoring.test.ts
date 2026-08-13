@@ -69,12 +69,16 @@ describe('absence is never a penalty', () => {
     expect(penalties).toHaveLength(0);
   });
 
-  it('reports those heuristics as inapplicable rather than as scoring zero', () => {
+  it('reports the absent heuristic as inapplicable rather than as scoring zero', () => {
     const result = score(absences);
-    const inapplicableIds = result.inapplicableSignals.map((signal) => signal.id);
-    expect(inapplicableIds).toContain('mail.dmarc_policy');
-    expect(inapplicableIds).toContain('footprint.dnssec');
-    expect(inapplicableIds).toContain('footprint.saas_vendors');
+    expect(result.inapplicableSignals.map((signal) => signal.id)).toContain('footprint.dnssec');
+  });
+
+  it('says nothing at all about the absent observations', () => {
+    const result = score(absences);
+    const reported = result.observations.map((observation) => observation.id);
+    expect(reported).not.toContain('mail.dmarc_policy');
+    expect(reported).not.toContain('footprint.saas_vendors');
   });
 
   it('discounts correlated absences instead of accumulating them', () => {
@@ -92,6 +96,11 @@ describe('absence is never a penalty', () => {
  * the regression guard against a well-meaning change reintroducing a credit an account farmer can buy
  * with a text editor.
  *
+ * These now live in `lib/scoring/observations.ts`, where there is no weight to reintroduce: the type
+ * carries evidence and a rationale and no way to express points at all. The strongest assertion below
+ * is therefore the structural one — that none of them appears in the signal registry — because it
+ * fails on the change rather than on the consequence of the change.
+ *
  * The list is shorter than the set of credits 1.3.0 withdrew. These are the ones still reported, which
  * is to say the ones riding along in a record already being fetched. BIMI and business services had
  * lookups of their own and so were deleted outright rather than zeroed; see `removed signals stay
@@ -108,23 +117,24 @@ describe('self-asserted records are reported but never scored', () => {
     'footprint.dkim',
   ];
 
+  it('keeps every one of them out of the scoring registry entirely', () => {
+    const scored = SIGNALS.map((signal) => signal.id);
+    for (const id of UNVERIFIABLE) {
+      expect(scored, `${id} must not be a scoring signal`).not.toContain(id);
+    }
+  });
+
   it('scores a domain publishing every unverifiable record exactly as one publishing none', () => {
     expect(score(selfAssertedRecords()).legitimacy).toBe(score(modestNewBusiness()).legitimacy);
   });
 
-  it('pays nothing for any one of them individually', () => {
-    const signals = score(selfAssertedRecords()).signals;
+  it('still reports and explains each one, since a reader can weigh what the score will not', () => {
+    const observations = score(selfAssertedRecords()).observations;
     for (const id of UNVERIFIABLE) {
-      const signal = signals.find((entry) => entry.id === id);
-      expect(signal, `${id} should still be reported`).toBeDefined();
-      expect(signal!.points, id).toBe(0);
-    }
-  });
-
-  it('still explains each one, since a reader can weigh what the score will not', () => {
-    const signals = score(selfAssertedRecords()).signals;
-    for (const id of UNVERIFIABLE) {
-      expect(signals.find((entry) => entry.id === id)!.evidence.length, id).toBeGreaterThan(0);
+      const observation = observations.find((entry) => entry.id === id);
+      expect(observation, `${id} should still be reported`).toBeDefined();
+      expect(observation!.evidence.length, id).toBeGreaterThan(0);
+      expect(observation!.rationale.length, id).toBeGreaterThan(0);
     }
   });
 
@@ -207,21 +217,19 @@ describe('suffixes with no published price', () => {
     return facts;
   };
 
-  it('reports the absence as evidence rather than treating it as inapplicable', () => {
+  const reportedIds = (facts: ReturnType<typeof establishedSmallBusiness>) =>
+    score(facts).observations.map((entry) => entry.id);
+
+  it('reports the absence as evidence rather than staying silent about it', () => {
     const result = score(unpricedSuffix());
-    const signal = result.signals.find((entry) => entry.id === 'economics.unpriced_suffix');
-    expect(signal?.evidence).toContain('web.id');
-    expect(result.inapplicableSignals.map((entry) => entry.id)).not.toContain(
-      'economics.unpriced_suffix',
+    const observation = result.observations.find(
+      (entry) => entry.id === 'economics.unpriced_suffix',
     );
+    expect(observation?.evidence).toContain('web.id');
   });
 
-  it('scores it neutrally, because the two explanations for it have opposite signs', () => {
-    const result = score(unpricedSuffix());
-    const signal = result.signals.find((entry) => entry.id === 'economics.unpriced_suffix');
-    expect(signal?.points).toBe(0);
-    expect(DEFAULT_CONFIG.economics.unpricedSuffix).toBe(0);
-    expect(result.legitimacy).toBe(score(establishedSmallBusiness()).legitimacy);
+  it('moves no points, because the two explanations for it have opposite signs', () => {
+    expect(score(unpricedSuffix()).legitimacy).toBe(score(establishedSmallBusiness()).legitimacy);
   });
 
   it('lowers confidence instead, since the dimension genuinely returned no price', () => {
@@ -232,10 +240,12 @@ describe('suffixes with no published price', () => {
 
   it('stays silent on an accredited suffix, whose absence has the opposite explanation', () => {
     const result = score(accreditedInstitution());
-    const ids = result.signals.map((signal) => signal.id);
-    expect(ids).not.toContain('economics.unpriced_suffix');
+    expect(result.observations.map((entry) => entry.id)).not.toContain(
+      'economics.unpriced_suffix',
+    );
     // The accreditation credit is paid once, in the name dimension, which is what makes the note
     // redundant here rather than merely quiet.
+    const ids = result.signals.map((signal) => signal.id);
     expect(ids).toContain('name.vetted_suffix');
     expect(ids.filter((id) => id.endsWith('vetted_suffix'))).toHaveLength(1);
   });
@@ -243,8 +253,7 @@ describe('suffixes with no published price', () => {
   it('stays silent on a platform-issued name, which has no registry price to publish', () => {
     const provider = providerSubdomain();
     provider.pricing = { suffix: 'pages.dev', unpriced: true };
-    const ids = score(provider).signals.map((signal) => signal.id);
-    expect(ids).not.toContain('economics.unpriced_suffix');
+    expect(reportedIds(provider)).not.toContain('economics.unpriced_suffix');
   });
 });
 
@@ -274,7 +283,7 @@ describe('combinations', () => {
       ],
     };
     const result = score(domain);
-    expect(result.signals.map((signal) => signal.id)).toContain('footprint.dkim');
+    expect(result.observations.map((entry) => entry.id)).toContain('footprint.dkim');
     expect(result.combinations.map((combo) => combo.id)).not.toContain(
       'combo.inbound_without_outbound',
     );

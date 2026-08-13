@@ -23,9 +23,6 @@ import snapshot from './whois-servers.json';
 
 const SERVERS = snapshot.servers as Record<string, string>;
 
-export const WHOIS_SERVER_SOURCE = snapshot.source;
-export const WHOIS_SNAPSHOT_DATE = snapshot.fetchedAt;
-
 /**
  * Finds the port-43 server for a suffix, preferring the longest matching entry.
  *

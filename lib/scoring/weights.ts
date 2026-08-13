@@ -187,12 +187,6 @@ export const DEFAULT_CONFIG = {
     /** Renewal-to-registration ratio, applied only inside the first registration term. */
     renewalRatioHigh: { threshold: 10, points: -6 },
     renewalRatioModerate: { threshold: 5, points: -3 },
-    /**
-     * Suffix absent from the price list. Zero on purpose, and not an oversight to be filled in: absence
-     * means either that the suffix is not openly registrable or that it sells cheaply outside the
-     * mainstream market, and those deserve opposite signs. It is reported to the reader instead.
-     */
-    unpricedSuffix: 0,
   },
 
   age: {
@@ -218,10 +212,11 @@ export const DEFAULT_CONFIG = {
   /**
    * Mail posture, scored on the one part of it a third party has to agree to.
    *
-   * Six credits here were zeroed in 1.3.0 rather than deleted, because each remains a fact worth
-   * reporting and none of them is evidence. Every one was a string the domain publishes about itself
-   * with nothing checking it: `p=reject`, `aspf=s`, `sp=reject` and an SPF `include:` naming a paid
-   * platform are all free tag edits. They stay because they ride along in records fetched anyway.
+   * Six credits here were zeroed in 1.3.0, because none of them is evidence: `p=reject`, `aspf=s`,
+   * `sp=reject`, a published SPF record and an SPF `include:` naming a paid platform are all free tag
+   * edits the domain writes about itself with nothing checking them. Five of the six remain worth
+   * showing beside a verdict and ride along in records fetched anyway, so they are collected as
+   * observations, which carry no weight to tune. See `lib/scoring/observations.ts`.
    *
    * A seventh, `bimi`, was deleted outright. It was the plainest case of the same defect — its rationale
    * priced a Verified Mark Certificate at +8 while the collector only ever checked that the record began
@@ -233,13 +228,7 @@ export const DEFAULT_CONFIG = {
    * the credit is now paid on that confirmation rather than on the domain naming a vendor.
    */
   mail: {
-    spfPresent: 0,
-    dmarcEnforcing: 0,
-    dmarcMonitorOnly: 0,
-    strictAlignment: 0,
-    explicitSubdomainPolicy: 0,
     commercialRua: 4,
-    paidSpfSenders: 0,
     /** The only negatives are affirmative misconfigurations, never absence. */
     spfPermitAll: -4,
     liveSiteWithoutSpf: -3,
@@ -258,25 +247,20 @@ export const DEFAULT_CONFIG = {
    *
    * The dimension was built on the premise that a verification record is "the residue of someone
    * completing a domain-verification step inside a paid product". The residue is indistinguishable
-   * from the thing itself: `countSaasVendors` matches a TXT prefix, no vendor offers any way to
-   * confirm a token it issued, and five invented strings earned the top tier. DKIM keys are free to
-   * generate. Both are still reported, since the records they read arrive with work being done anyway.
+   * from the thing itself: the vendor census matches a TXT prefix, no vendor offers any way to confirm
+   * a token it issued, and five invented strings earned the top tier. DKIM keys are free to generate.
+   * Both are still reported, since the records they read arrive with work being done anyway, but as
+   * observations rather than as weights of zero. See `lib/scoring/observations.ts`.
    *
    * The business-service tiers were deleted rather than zeroed, because they had the same defect in a
    * worse form — a `_caldav._tcp` or `_sip._tls` record was credited for pointing anywhere at all — and
    * six dedicated DNS queries per analysis existed to feed them. See `lib/collect/dns.ts`.
    *
-   * DNSSEC is the exception and the reason the dimension still exists: the resolver validated the
-   * chain cryptographically, so the AD flag is somebody else's arithmetic rather than the domain's
-   * own claim. It is cheap to enable, which is why it is worth little, but it cannot be asserted.
+   * DNSSEC is what is left and the reason the dimension still exists: the resolver validated the chain
+   * cryptographically, so the AD flag is somebody else's arithmetic rather than the domain's own claim.
+   * It is cheap to enable, which is why it is worth little, but it cannot be asserted.
    */
   footprint: {
-    saasVendorTiers: [
-      { atLeast: 5, points: 0 },
-      { atLeast: 2, points: 0 },
-      { atLeast: 1, points: 0 },
-    ],
-    dkimPresent: 0,
     dnssec: 3,
   },
 

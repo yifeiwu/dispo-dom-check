@@ -1,5 +1,6 @@
 import { ageDays, firstSeen, type DomainFacts } from '../facts';
 import { SIGNALS, type SignalResult } from './signals';
+import { observe, type ObservationResult } from './observations';
 import { evaluateCombinations, type CombinationResult } from './combinations';
 import { clamp, DEFAULT_CONFIG, type Dimension, type ScoringConfig, type Verdict } from './weights';
 import { verdictFor } from './verdict';
@@ -50,6 +51,8 @@ export type ScoreResult = {
   signals: SignalResult[];
   /** Signals that did not apply, which renders differently from a signal scoring zero. */
   inapplicableSignals: { id: string; label: string; rationale: string }[];
+  /** Facts collected and reported beside the verdict that move no score by construction. */
+  observations: ObservationResult[];
   combinations: CombinationResult[];
   firstSeen?: { date: string; source: string };
   ageDays?: number;
@@ -156,6 +159,7 @@ export function score(
     dimensions,
     signals,
     inapplicableSignals: inapplicable,
+    observations: observe(facts),
     combinations: combos.results,
     firstSeen: seen ?? undefined,
     ageDays: age ?? undefined,

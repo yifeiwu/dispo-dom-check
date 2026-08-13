@@ -150,7 +150,7 @@ function streamed(input: Extract<NormalisedInput, { kind: 'ok' }>): Response {
       };
 
       try {
-        const result = await analyze(input, undefined, {
+        const result = await analyze(input, {
           onSource: (status) => send({ type: 'source', ...status }),
         });
         send({ type: 'result', ...toResponse(result) });
@@ -203,6 +203,7 @@ function toResponse(result: AnalysisResult): AnalyzeResponse {
     dimensions: result.score.dimensions,
     signals: result.score.signals,
     inapplicableSignals: result.score.inapplicableSignals,
+    observations: result.score.observations,
     combinations: result.score.combinations,
     sources: result.facts.sources,
     providerSuffix: result.facts.meta.providerSuffix,

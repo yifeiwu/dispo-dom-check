@@ -1,13 +1,24 @@
 # Calibration
 
-Model version `1.3.0`. Every figure below comes from a single collection of the whole holdout on
-13 August 2026 and the two offline runs over it described under "Reproducing", so all of them are
-reproducible from the same stored responses.
+Every figure below comes from a single collection of the whole holdout on 13 August 2026 and the two
+offline runs over it described under "Reproducing", so all of them are reproducible from the same
+stored responses. **The model was at `1.3.0` when that collection was scored; the current model is
+`1.4.0`.** This document is therefore a dated report rather than a description of what ships, and it is
+not rewritten in place when the model moves — a measurement is only meaningful with the version it was
+taken against. Regenerate it with `npm run audit` when the numbers need to be current.
 
-That collection predates one change to what is collected. The port-43 lookup has since been widened to run
-wherever RDAP produced no answer, rather than only where a suffix publishes no RDAP service at all, so
-nothing here prices it: the registration coverage below is what the narrower trigger achieved. See
-`docs/SOURCES.md`.
+Three things have changed since, none of them priced here:
+
+- **`signup.checkmail`**, added in `1.4.0`, is unmeasurable against this holdout by construction. The
+  section "One signal is unmeasurable by construction" below sets out why and what it costs.
+- **The port-43 lookup has been widened** to run wherever RDAP produced no answer, rather than only
+  where a suffix publishes no RDAP service at all, so the registration coverage below is what the
+  narrower trigger achieved. See `docs/SOURCES.md`.
+- **The eight zero-weight signals became observations** in `1.4.0`. They scored nothing then and score
+  nothing now; what changed is that they are no longer in the registry the audit iterates, so a rerun
+  will report 23 signals rather than 31 and the "zero by design" tier will be empty of them. Nothing
+  about the measured separation moves, because a signal contributing zero points contributed zero to
+  every figure in this document. See `lib/scoring/observations.ts`.
 
 ## The holdout
 
@@ -102,9 +113,15 @@ stored, which is what makes it safe to interrupt. It does not touch the metered 
 any flag, and needs no opt-out to avoid it: `lib/analyze.ts` gates that collector on whether a recording
 or replay context is active, so all four commands above are structurally incapable of spending the
 monthly allowance. This is deliberately not an environment variable — the whole point is that a
-collection run cannot burn a month's quota by someone forgetting one. The second looks redundant and is not; see "Stored
-responses" below. Both reports then read the whole holdout with no sampling — the family weighting is what
-stops one operator's several hundred generated names dominating a figure, so there is nothing to cap.
+collection run cannot burn a month's quota by someone forgetting one. The second looks redundant and is
+not; see "Stored responses" below. Both reports then read the whole holdout with no sampling — the
+family weighting is what stops one operator's several hundred generated names dominating a figure, so
+there is nothing to cap.
+
+The last two are one script, and `npm run calibrate` is `signal-audit --bands`. It was a script of its
+own until `1.4.0`, and the merge removed a way for the two reports to disagree rather than just a file:
+it replayed the stored transcripts through `analyze` while the audit scored the stored *facts*, so
+running them out of order gave each a different view of one collection. Both now read the same facts.
 
 Topping up one group without probing the others is what `--group` is for:
 
@@ -125,9 +142,13 @@ needs `--reparse`. Only a change to *what is requested* needs the network again.
 `--reparse` immediately after a collection is not redundant, which is the part that is easy to get wrong.
 A collection writes the facts its deadlines allowed: where a collector was still waiting when the 15-second
 budget fired, the domain is stored without that evidence. Replay answers instantly and gets further, so a
-re-parse produces slightly *more* complete facts than the collection that fed it. `calibrate` replays and
-never probes, so skipping the re-parse leaves the two scripts scoring different facts and quietly
-disagreeing about a holdout they both read from one store. With the re-parse run, they agree exactly.
+re-parse produces slightly *more* complete facts than the collection that fed it. Running it promotes the
+whole store to what the responses actually support, which is the state every figure in this document is
+measured against.
+
+Until `1.4.0` this also decided whether the two reports agreed with each other, because one replayed and
+one scored facts. That failure mode is gone: both read the facts, so `--reparse` now affects only how
+complete those facts are, and it affects both identically.
 
 The store is gitignored along with the rest of `.audit-cache`, holds bodies capped at 256 KB, and is
 gzipped. The full holdout occupies 31 MB across 4,699 transcripts, about 4.6 KB each, down from 32 MB and
@@ -390,7 +411,8 @@ Conditional lift is the third figure, and it is the one that protects a rare sig
 signal fired on, the abuse share against the cohort base rate, with a Wilson interval. A signal that fires
 twelve times cannot show a ΔAUC, but it can still show that everything it fired on was legitimate.
 
-The 30 signals and 7 combinations tier as follows:
+The 30 signals and 7 combinations of `1.3.0` tier as follows. Eight of those signals are observations
+from `1.4.0` and a rerun will not list them:
 
 | Tier | Signals | Combinations | Meaning |
 | --- | --- | --- | --- |
@@ -430,6 +452,11 @@ The "zero by design" tier holds the seven credits `1.3.0` withdrew but kept coll
 left this tier with the fresh collection, which is the point of that tier being a statement about the
 model rather than about the data: a signal belongs in it when reporting the fact is free and nothing
 weighs it, not when the run failed to observe it.
+
+All eight became observations in `1.4.0`, which is the same statement made structurally: an observation
+has no weight to be zero. The tier itself is kept, because it still catches a signal that applies and
+never fires — the unverified `mail.commercial_rua` case is exactly that — and distinguishing it from a
+source that never answered remains worth doing.
 
 `mail.bimi` and `footprint.business_services` were the two withdrawn credits that did not land there.
 Each owned the DNS queries that fed it, and a fact nothing weighs does not justify a round trip on every

@@ -226,6 +226,10 @@ with your own blocklist, not as a replacement for one.
 
 | Document | Contents |
 | --- | --- |
-| `docs/SCORING.md` | The model specification: dimensions, point tables, combinations, bands |
+| `docs/SCORING.md` | Why each dimension, combination and band exists, and what was measured and dropped |
 | `docs/SOURCES.md` | Every source, what it returns, and every source rejected with the observed reason |
-| `docs/CALIBRATION.md` | Measured separation against a labelled holdout, and what it changed |
+| `docs/CALIBRATION.md` | Measured separation against a labelled holdout, dated to the model it was run against |
+| `GET /api/model` | The live numbers: every weight, tier, clamp and band, with each rationale |
+
+The split is deliberate. Prose describing weights drifts from the weights, so the numbers are served
+from the registries the scorer evaluates and the documents carry the reasoning instead.

@@ -1,5 +1,4 @@
 import { fetchJson } from '../fetch';
-import { UnsupportedError } from '../collector';
 import type { DnsFacts } from '../facts';
 
 /**
@@ -214,11 +213,4 @@ export async function txtAtFollowingCname(
 
   const followed = await query(cnameTarget, 'TXT', timeoutMs);
   return { records: txtValues(followed.answers), cnameTarget };
-}
-
-/** Guards the collectors that cannot say anything about a platform-issued name. */
-export function assertNotProviderScoped(isProviderScoped: boolean, what: string): void {
-  if (isProviderScoped) {
-    throw new UnsupportedError(`${what} belongs to the hosting provider, not to this name`);
-  }
 }

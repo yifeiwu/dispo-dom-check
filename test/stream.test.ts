@@ -105,7 +105,7 @@ describe('per-source progress', () => {
     stubNetwork();
 
     const seen: SourceStatus[] = [];
-    const result = await analyze(okInput('example-business.com'), undefined, {
+    const result = await analyze(okInput('example-business.com'), {
       onSource: (status) => seen.push(status),
     });
 
@@ -120,7 +120,7 @@ describe('per-source progress', () => {
     stubNetwork();
 
     const seen = new Map<string, SourceStatus>();
-    const result = await analyze(okInput('example-business.com'), undefined, {
+    const result = await analyze(okInput('example-business.com'), {
       onSource: (status) => seen.set(status.source, status),
     });
 
@@ -132,7 +132,7 @@ describe('per-source progress', () => {
 
   it('leaves the analysis unchanged when nothing is watching', async () => {
     stubNetwork();
-    const watched = await analyze(okInput('example-business.com'), undefined, {
+    const watched = await analyze(okInput('example-business.com'), {
       onSource: () => {},
     });
 
@@ -149,7 +149,7 @@ describe('per-source progress', () => {
   it('does not let a failing consumer break the analysis', async () => {
     stubNetwork();
 
-    const result = await analyze(okInput('example-business.com'), undefined, {
+    const result = await analyze(okInput('example-business.com'), {
       onSource: () => {
         throw new Error('the client hung up');
       },
@@ -180,7 +180,7 @@ describe('per-source progress', () => {
     }) as unknown as typeof fetch;
 
     const order: string[] = [];
-    await analyze(okInput('example-business.com'), undefined, {
+    await analyze(okInput('example-business.com'), {
       onSource: (status) => order.push(status.source),
     });
 

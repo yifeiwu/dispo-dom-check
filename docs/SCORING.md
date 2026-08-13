@@ -1,15 +1,16 @@
 # Scoring model
 
-Model version: `1.3.0`
+Model version: `1.4.0`
 
-This document is the specification. The implementation lives in
+This document is the reasoning, not the numbers. The implementation lives in
 [`lib/scoring/weights.ts`](../lib/scoring/weights.ts), which is the single place any weight,
 threshold, clamp, band boundary or override rule is allowed to exist. If this document and that file
 disagree, the file wins and this document is stale.
 
-`GET /api/model` returns the active config plus every signal and combination definition with its
-rationale. The `/how-it-works` page renders from that endpoint rather than from this prose, so what
-users read cannot drift from what the scorer does.
+`GET /api/model` returns the active config plus every signal, observation and combination definition
+with its rationale. The `/how-it-works` page renders from those same registries rather than from this
+prose, so what users read cannot drift from what the scorer does. Reach for one of those two when the
+question is "what is this worth"; reach for this document when the question is "why".
 
 ## Threat model: bot signups, not phishing
 
@@ -75,23 +76,19 @@ The consequence is narrower than it was. A suffix publishing neither yields no a
 registry answers over WHOIS without publishing a registration date — DENIC, nic.at and EURid all do
 exactly that. Both cases are reported as missing evidence, which lowers confidence, and never as youth.
 
-## Dimensions and point tables
+## Dimensions and why each exists
 
-Every dimension is clamped so none can dominate. Clamps are listed with each dimension.
+Every dimension is clamped so none can dominate.
 
-### Signup capability (clamp -40 to +7) — primary
+**This section deliberately carries no point tables.** It used to, and they were a second copy of
+[`lib/scoring/weights.ts`](../lib/scoring/weights.ts) that drifted from it. The live numbers — every
+weight, tier, clamp and band, with each signal's rationale — are served by `GET /api/model` and
+rendered at `/how-it-works`, both read directly from the registries the scorer evaluates. What is kept
+here is the part no registry can hold: why each dimension exists, what it was measured against, and
+which arguments were rejected. Numbers appear below only where a decision cannot be explained without
+one, and are usually historical.
 
-| Signal | Points | Flag |
-| --- | --- | --- |
-| MX at a temp-mail provider | -40 | `disposable` |
-| Free unlimited-alias routing on a custom domain | -21 | `catch_all_capable` |
-| MX at an alias forwarder | -12 | `forwarder` |
-| Submitted domain is a shared alias-relay domain | 0 | `forwarder` |
-| Reputation service calls the domain disposable | -40, plus its risk tier | `disposable` |
-| Reputation service scores risk at 90 or above | -12 | |
-| Reputation service scores risk at 75 to 89 | -6 | |
-| Reputation service answered and knows nothing against the domain | +1 | |
-| MX at a paid business mail tenant | +6 | |
+### Signup capability — primary
 
 Forwarders are flagged rather than condemned: they are legitimate privacy tools that also happen to be
 ideal for multi-account creation, so the policy decision belongs to the consumer. In `1.2.0` the
@@ -122,18 +119,11 @@ is the entire reason the exception is affordable at this size and would not be a
 The vendor's `block`, `valid` and `is_email_forwarder` fields are shown as evidence and never scored;
 `docs/SOURCES.md` records which rejected judgement each one would reintroduce.
 
-### Registration economics (clamp -18 to 0)
+### Registration economics
 
-| Signal | Points |
-| --- | --- |
-| Suffix first-year price under $2 | -12 |
-| Suffix first-year price $2 to $5 | -8 |
-| Suffix first-year price $5 to $10 | -2 |
-| Suffix first-year price $10 or more | 0 |
-| Renewal-to-registration ratio above 10x, inside first term only | -6 |
-| Renewal-to-registration ratio above 5x, inside first term only | -3 |
-| Suffix absent from the reference price list, unless accredited | 0, reported to the reader |
-| Name issued free by a subdomain or dynamic-DNS provider | 0, still read by `combo.farm_profile` |
+Cheap suffixes and steep first-year discounts are priced here, in tiers; a name issued free by a
+subdomain or dynamic-DNS provider scores nothing in this dimension and is read by `combo.farm_profile`
+instead.
 
 The dimension has no positive side. The vetted-suffix credit used to be paid here as well as in the name
 dimension, which meant one fact earning points twice and clearing two clamps instead of one; it is now
@@ -156,53 +146,36 @@ used to serve as a bound, which was wrong in the direction that hides abuse: sec
 namespaces undercut their own ccTLD heavily, so `web.id` inherited `.id` and read as an $18 domain when
 it retails near $2.
 
-The absence is reported to the reader and scored zero, because it has two explanations with opposite
+The absence is reported to the reader and never scored, because it has two explanations with opposite
 signs and nothing in a price list distinguishes them. The suffix may not be openly registrable, which
-is the same argument that earns an accredited suffix `+4`; or it may be sold only by registrars local to
-its registry, which is where the cheapest namespaces in existence live. Guessing either way would
-penalise national namespaces for being national, or credit the ex-free ccTLDs for being obscure. What
-the model does instead is say so, and let the missing dimension lower confidence. Where accreditation
-already answers the question the note is suppressed, since the vetted-suffix signal covers that case.
+is the same argument that earns an accredited suffix its credit in the name dimension; or it may be
+sold only by registrars local to its registry, which is where the cheapest namespaces in existence
+live. Guessing either way would penalise national namespaces for being national, or credit the ex-free
+ccTLDs for being obscure. What the model does instead is say so, and let the missing dimension lower
+confidence. Where accreditation already answers the question the note is suppressed, since the
+vetted-suffix signal covers that case. It is an observation rather than a signal, so there is no weight
+to set: see [`lib/scoring/observations.ts`](../lib/scoring/observations.ts).
 
-### Age and registration (clamp -30 to +20)
+### Age and registration
 
-| Age | Points |
-| --- | --- |
-| Under 7 days | -30 |
-| 7 to 30 days | -22 |
-| 30 to 90 days | -14 |
-| 90 to 180 days | -8 |
-| 180 to 365 days | -3 |
-| 1 to 2 years | +4 |
-| 2 to 5 years | +10 |
-| 5 to 10 years | +16 |
-| Over 10 years | +20 |
+Age is tiered from under a week to over a decade, and it is the heaviest thing in the model; see "Age
+is the anchor" above. Beside the curve sit a small penalty for a one-year term, one for a first-term
+registration expiring unrenewed, and the two registry-status penalties for a hold and for pending
+deletion.
 
-| Additional signal | Points |
-| --- | --- |
-| Registration term of exactly 1 year | -3 |
-| Inside first term, expiring within 60 days, not renewed | -10 |
-| RDAP `serverHold` or `clientHold` | -25 |
-| RDAP `pendingDelete` or `redemptionPeriod` | -10 |
-
-### Mail posture (clamp -6 to +4) — confirmed, not merely published
+### Mail posture — confirmed, not merely published
 
 Depth of configuration was the discriminator here until `1.3.0`, on the reasoning that presence of SPF and
 DMARC stopped meaning anything once the 2024 bulk-sender rules pushed everyone to publish them. Depth
 turned out to be no better: every part of it is a tag the domain writes in its own zone, so what the
 dimension measured was what an operator was willing to type.
 
-| Signal | Points |
-| --- | --- |
-| DMARC `rua` at a commercial vendor **that published the RFC 7489 authorisation record** | +4 |
-| DMARC `rua` naming a commercial vendor that has not | 0, reported to the reader |
-| SPF present | 0, reported |
-| DMARC `p=reject`, `p=quarantine` or `p=none` | 0, reported |
-| Strict alignment (`aspf=s` or `adkim=s`) | 0, reported |
-| Explicit subdomain policy (`sp=`) | 0, reported |
-| SPF includes naming paid SaaS senders | 0, reported |
-| SPF ending in `+all` | -4 |
-| MX and a live site but no SPF at all | -3 |
+What is left that scores is a credit for a DMARC `rua` at a commercial vendor **that published the RFC
+7489 authorisation record**, and two penalties: an SPF record ending in `+all`, and mail plus a live
+site with no SPF at all. SPF presence, the DMARC policy, strict alignment, an explicit subdomain policy
+and SPF includes naming paid senders are all still collected and shown, as observations carrying no
+weight rather than as signals weighted at zero. See
+[`lib/scoring/observations.ts`](../lib/scoring/observations.ts).
 
 The reporting vendor is the exception because RFC 7489 §7.1 makes it checkable. Sending aggregate reports
 to a destination outside the domain's own namespace requires that destination to authorise it, by
@@ -223,15 +196,11 @@ paying for presence, which is why the `+2` that used to sit at the top of this t
 removals below. Whether a domain can receive mail is still read as a fact, by the two conjunctions that
 require it and by the mail-only-zone penalty, but on its own it is not evidence.
 
-### Configuration effort (clamp -10 to +10)
+### Configuration effort
 
-The best available proxy for whether a human set this domain up for a purpose beyond receiving mail.
-
-| Signal | Points |
-| --- | --- |
-| Record breadth: MX with no web host and no `www` | -10 |
-| Record breadth curve across apex, `www`, mail host and MX | up to +8 |
-| Site title contains the domain label | +4 |
+The best available proxy for whether a human set this domain up for a purpose beyond receiving mail. It
+pays per configured record class across the apex, `www`, a mail host and MX, credits a site title
+containing the domain label, and penalises a zone with mail and nothing else at all.
 
 Breadth counts only records that have to point at a host. SPF, DKIM, vendor verification and business
 services were dropped from the count in `1.3.0`, because a zone can be filled with TXT records saying
@@ -249,13 +218,11 @@ the dimension can produce +12. The two credits overlap, since the domain with wi
 usually also the one whose title matches its own label, so the pair pays twice for a single underlying
 fact. Bounding the sum was preferred to repricing either signal, because each is well-behaved alone.
 
-### Organisational footprint (clamp 0 to +3)
+### Organisational footprint
 
-| Signal | Points |
-| --- | --- |
-| DNSSEC validated (`AD` flag) | +3 |
-| 5 or more, 2 to 4, or exactly 1 distinct SaaS verification vendor in apex TXT | 0, reported |
-| DKIM selectors present | 0, reported |
+One signal, a validated DNSSEC chain. The SaaS verification census and DKIM selector presence are still
+collected and shown, as observations rather than as signals weighted at zero; see
+[`lib/scoring/observations.ts`](../lib/scoring/observations.ts).
 
 The dimension was built on the premise that a verification record is the residue of someone completing a
 domain-verification step inside a paid product. The residue is indistinguishable from the thing itself:
@@ -270,14 +237,11 @@ is cheap to enable, which is why it pays little, but it cannot be asserted.
 This dimension is positive-only, because having none of these records is the normal condition of a
 legitimate small business rather than evidence of anything.
 
-### Site existence (clamp -12 to +6)
+### Site existence
 
-| Signal | Points |
-| --- | --- |
-| HTTPS 200 with substantive titled content | +6 |
-| Immediate redirect off the domain, to any destination | 0 |
-| Parking fingerprint or parking nameservers | -12 (flag `parked`) |
-| No A record while under 30 days old | -6 |
+A credit for an HTTPS 200 carrying substantive titled content, and penalties for a parking fingerprint
+and for having no A record while under a month old. An immediate redirect off the domain scores
+nothing, in either direction.
 
 Soft 404s are detected by status code rather than body size, because a large custom error page is
 otherwise indistinguishable from a real one.
@@ -287,12 +251,10 @@ oversight; see the removals below. It still withholds the content credit, becaus
 elsewhere never serves the page itself, so redirecting costs a domain the +6 without charging it
 anything.
 
-### Name pattern (clamp -5 to +15)
+### Name pattern
 
-| Signal | Points |
-| --- | --- |
-| Template-like word plus 3 to 6 trailing digits | -5 |
-| Restricted or vetted suffix | +15 |
+Two signals: a small penalty for a template-like word followed by three to six trailing digits, and the
+credit for a restricted or accreditation-gated suffix.
 
 The dimension is deliberately thin. Character-histogram measures of the label, entropy and hyphen
 counting, were built and then dropped after the benchmark showed they select legitimate domains ahead
@@ -318,21 +280,23 @@ The total contribution from all combinations is capped at 40 points of magnitude
 
 ### Superadditive (`bonus`)
 
-| Combination | Points | Why the conjunction matters |
-| --- | --- | --- |
-| Farm profile: cheap suffix with no brake on disposal, inside first term, MX configured, no real website | -25 | Each part alone is innocent. A new cheap domain may be a startup; a mail-only domain is a legitimate setup. Together they describe a domain whose sole function is receiving mail at throwaway cost. |
-| Free unlimited-alias routing, under 90 days old, no website | -15 | Routing alone is common among hobbyists. On a young cheap domain with no site, that explanation is gone. |
-| Inbound configured, outbound identity absent | -10 | MX at a free or alias provider while SPF, DKIM and DMARC are all missing. This uses absence without violating the absent-DMARC rule, because the signal is the pairing of unlimited inbound aliasing with zero investment in sending identity. |
-| Parked or contentless page with MX present | -8 | Parking normally implies no mail at all. |
-| Registrar defaults, bundled forwarding, under 90 days old, no website | -8 | Default delegation is harmless alone. When the registrar, nameservers and forwarding MX all agree and nothing else was built, the untouched mailbox-only template is affirmative evidence. |
+Ordered by what each is worth, heaviest first:
+
+| Combination | Why the conjunction matters |
+| --- | --- |
+| Farm profile: cheap suffix with no brake on disposal, inside first term, MX configured, no real website | Each part alone is innocent. A new cheap domain may be a startup; a mail-only domain is a legitimate setup. Together they describe a domain whose sole function is receiving mail at throwaway cost. |
+| Free unlimited-alias routing, under 90 days old, no website | Routing alone is common among hobbyists. On a young cheap domain with no site, that explanation is gone. |
+| Inbound configured, outbound identity absent | MX at a free or alias provider while SPF, DKIM and DMARC are all missing. This uses absence without violating the absent-DMARC rule, because the signal is the pairing of unlimited inbound aliasing with zero investment in sending identity. |
+| Parked or contentless page with MX present | Parking normally implies no mail at all. |
+| Registrar defaults, bundled forwarding, under 90 days old, no website | Default delegation is harmless alone. When the registrar, nameservers and forwarding MX all agree and nothing else was built, the untouched mailbox-only template is affirmative evidence. |
 
 ### Sign-flipping (`override`)
 
 These matter more than bonuses because they invert a signal rather than nudging it.
 
-| Combination | Effect | Why |
-| --- | --- | --- |
-| Conclusive legitimacy: vetted suffix, over 2 years old, paid mail tenant | Floors `legitimacy` at 80 | No plausible farm domain has all three. Positive overrides keep false-positive pressure off the established. |
+One combination: a vetted suffix, over two years old, with a paid mail tenant floors `legitimacy` at a
+value no additive total can pull it below. No plausible farm domain has all three, and positive
+overrides keep false-positive pressure off the established.
 
 There is deliberately no drop-catch override. Detecting a lapsed and recaught domain needs an
 independent history to establish a gap against the registration date, and with certificate and archive
@@ -340,9 +304,9 @@ history removed there is none. Age credit is therefore inherited by a new owner,
 
 ### Subadditive (`discount`) — the half that protects legitimate small businesses
 
-| Group | Effect | Why |
-| --- | --- | --- |
-| Missing DMARC, missing DNSSEC, zero SaaS verification records | Reported, nothing charged | Three measurements of a single latent factor, an unsophisticated operator, which describes most legitimate small businesses. |
+One group: missing DMARC, missing DNSSEC and no SaaS verification records together are reported and
+nothing is charged. They are three measurements of a single latent factor, an unsophisticated operator,
+which describes most legitimate small businesses.
 
 The group carried a scale of `0.3` until `1.3.0`, and it no longer carries one. A discount multiplies
 points, and after that release there are no points on any of its three members to multiply: absent DMARC
@@ -434,15 +398,10 @@ to any particular total. Registration counts as covered only when a creation dat
 not merely because a registry replied: several answer in full while publishing no date at all, and
 counting those would report confidence in an age the model does not have.
 
-| Dimension group | Weight |
-| --- | --- |
-| Registration (RDAP or WHOIS) | 30 |
-| Mail and DNS | 25 |
-| Signup capability | 20 |
-| Site | 10 |
-| Pricing | 10 |
+Five groups carry weight, in descending order: the registration record over either protocol, mail and
+DNS together, signup capability, then the site probe and suffix pricing tied at the bottom.
 
-The reputation source is deliberately absent from this table. Confidence is coverage of the evidence the
+The reputation source is deliberately absent from that list. Confidence is coverage of the evidence the
 verdict rests on, and this is the one source that can go dark partway through a month with every other
 upstream healthy, because it is metered. Given a weight, an exhausted allowance would drag every domain
 analysed afterwards toward `insufficient_evidence`, turning a billing event into a verdict about domains
@@ -626,10 +585,15 @@ it names, and so each was free for an account farmer to mint. On the holdout mos
 | `mail.subdomain_policy` | +2 | One more tag in the same record. |
 | `mail.spf_present` | +2 | Near-universal, free, and self-asserted. |
 
-Seven of the nine are still collected and reported at zero, because each rides along in a record the
-service fetches anyway: SPF and the vendor census come out of the apex TXT set, and the DMARC tags all
-come out of one `_dmarc` lookup. The audit gives them their own tier, `KEEP scores zero by design`, so
-that a signal deliberately paying nothing is never mistaken for one the run failed to observe.
+Seven of the nine are still collected and reported, because each rides along in a record the service
+fetches anyway: SPF and the vendor census come out of the apex TXT set, and the DMARC tags all come out
+of one `_dmarc` lookup. They spent two versions in the signal registry carrying a weight of zero, which
+made every consumer annotate around them — the audit needed a `scores zero by design` tier, the
+how-it-works page had to explain that a `0` here meant something different from a `0` there, and two of
+them still advertised a tiered range that paid the same nothing at every tier. In `1.4.0` they moved to
+[`lib/scoring/observations.ts`](../lib/scoring/observations.ts), where the type has no weight to carry
+and the distinction is structural rather than annotated. They are reported beside every verdict exactly
+as before.
 
 Two do not, and those two were deleted outright rather than zeroed, on the same reasoning that retired the
 `robots.txt` probe above. BIMI had a TXT lookup of its own at `default._bimi`, and business services had
@@ -703,6 +667,17 @@ number was consulted first, and three signals currently carry that tier.
 ## Changelog
 
 ### 1.4.0
+
+Split observations out of the signal registry. Eight entries carried a declared weight of zero and
+scored nothing for any domain by design, which every consumer then had to work around: the audit needed
+a tier for them, the how-it-works page had to annotate a `0` that meant something other than "came out
+neutral", and two advertised a tiered range paying the same nothing at every tier. They now live in
+[`lib/scoring/observations.ts`](../lib/scoring/observations.ts) with a type that has no weight to
+express, so the rule is enforced by construction rather than by nine zeros staying zero. Nothing about
+what is collected or shown changed, and `GET /api/model` gained an `observations` array beside
+`signals`. The removed config keys — `economics.unpricedSuffix`, five `mail` credits,
+`footprint.saasVendorTiers` and `footprint.dkimPresent` — are gone rather than zeroed, since there is
+no longer anything to set them to.
 
 Added `signup.checkmail`, one signal reading a third-party reputation verdict from Check-Mail.org. It
 closes the one gap the rest of the model cannot reach by construction: every other signal reads what a

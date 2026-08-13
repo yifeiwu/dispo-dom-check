@@ -357,6 +357,7 @@ export default function Home() {
           <SignalRows
             signals={showResult.signals}
             combinations={showResult.combinations}
+            observations={showResult.observations}
             inapplicable={showResult.inapplicableSignals}
           />
 

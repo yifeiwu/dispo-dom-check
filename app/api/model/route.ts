@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { COMBINATIONS } from '@/lib/scoring/combinations';
+import { OBSERVATIONS } from '@/lib/scoring/observations';
 import { SIGNALS } from '@/lib/scoring/signals';
 import { VERDICT_DESCRIPTIONS, VERDICT_LABELS } from '@/lib/scoring/verdict';
 import { DEFAULT_CONFIG } from '@/lib/scoring/weights';
@@ -25,6 +26,12 @@ export async function GET(): Promise<Response> {
         rationale: signal.rationale,
         /** The points the heuristic can contribute, before its dimension clamp. */
         weight: signal.weight(DEFAULT_CONFIG),
+      })),
+      /** Collected and reported beside every verdict, and carrying no weight by construction. */
+      observations: OBSERVATIONS.map((observation) => ({
+        id: observation.id,
+        label: observation.label,
+        rationale: observation.rationale,
       })),
       combinations: COMBINATIONS.map((combination) => ({
         id: combination.id,

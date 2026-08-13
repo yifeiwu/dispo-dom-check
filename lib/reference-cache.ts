@@ -1,4 +1,3 @@
-import type { AnalysisCache } from './cache';
 import { asSharedReference } from './record';
 
 /**
@@ -11,6 +10,11 @@ import { asSharedReference } from './record';
  * The suffix price feed used to live here too. It takes upwards of twelve seconds to answer, several
  * times the deadline any one source gets, so even cached it left the registration economics dimension
  * dead on the first request of every process. It is now a bundled snapshot in `lib/data` instead.
+ *
+ * `withBackgroundRefresh` is the whole public surface. There was once an injectable `AnalysisCache`
+ * seam in front of it, anticipating a shared KV store, but nothing ever passed one and the seam could
+ * not have worked: this module was reached directly and would have bypassed any injected
+ * implementation. A KV-backed variant belongs inside the store below, where every caller already goes.
  */
 
 type Entry = { value: unknown; expiresAt: number };
@@ -19,21 +23,15 @@ const store = new Map<string, Entry>();
 /** In-flight fetches, so concurrent requests share one upstream call rather than starting several. */
 const inflight = new Map<string, Promise<unknown>>();
 
-export const referenceCache: AnalysisCache = {
-  async get<T>(key: string): Promise<T | null> {
-    const entry = store.get(key);
-    if (!entry) return null;
-    if (entry.expiresAt < Date.now()) {
-      store.delete(key);
-      return null;
-    }
-    return entry.value as T;
-  },
-
-  async set<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
-    store.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
-  },
-};
+function read<T>(key: string): T | null {
+  const entry = store.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt < Date.now()) {
+    store.delete(key);
+    return null;
+  }
+  return entry.value as T;
+}
 
 /**
  * Fetches reference data under a deadline, but lets a slow fetch keep running in the background so it
@@ -48,7 +46,7 @@ export async function withBackgroundRefresh<T>(
   deadlineMs: number,
   fetcher: () => Promise<T>,
 ): Promise<T> {
-  const cached = await referenceCache.get<T>(key);
+  const cached = read<T>(key);
   if (cached) return cached;
 
   let pending = inflight.get(key) as Promise<T> | undefined;
@@ -57,8 +55,8 @@ export async function withBackgroundRefresh<T>(
     // Recorded apart from any one domain's transcript: this data is identical for every domain, and the
     // fetch happens under whichever analysis reached it first.
     pending = asSharedReference(fetcher)
-      .then(async (value) => {
-        await referenceCache.set(key, value, ttlSeconds);
+      .then((value) => {
+        store.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
         return value;
       })
       .finally(() => {

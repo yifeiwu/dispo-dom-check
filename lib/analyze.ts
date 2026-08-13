@@ -1,6 +1,4 @@
 import { BUDGET, isOk, runCollector, type CollectorResult } from './collector';
-import { RequestScopedCache, type AnalysisCache } from './cache';
-import { referenceCache } from './reference-cache';
 import { collectDns } from './collect/dns';
 import { collectRdap } from './collect/rdap';
 import { collectWhois, type WhoisResult } from './collect/whois';
@@ -55,29 +53,16 @@ export type AnalysisOptions = {
 };
 
 /**
- * The cache defaults to the reference store, which holds only the registry bootstrap. No domain-specific
- * result is cached anywhere: every domain is analysed from scratch on every request.
+ * No domain-specific result is cached anywhere: every domain is analysed from scratch on every request.
+ * The only cached thing in the system is the registry bootstrap, held for the process lifetime by
+ * `lib/reference-cache.ts`, which the RDAP collector reaches directly.
  */
 export async function analyze(
   input: Extract<NormalisedInput, { kind: 'ok' }>,
-  cache: AnalysisCache = referenceCache,
   options: AnalysisOptions = {},
 ): Promise<AnalysisResult> {
   const startedAt = Date.now();
   const analysedAt = new Date().toISOString();
-
-  // Shared for the lifetime of this request only, so the bootstrap is fetched at most once even when the
-  // injected cache is a passthrough.
-  const requestCache = new RequestScopedCache();
-  const layered: AnalysisCache = {
-    async get(key) {
-      return (await requestCache.get(key)) ?? (await cache.get(key));
-    },
-    async set(key, value, ttl) {
-      await requestCache.set(key, value, ttl);
-      await cache.set(key, value, ttl);
-    },
-  };
 
   const remaining = () => Math.max(500, BUDGET.globalMs - (Date.now() - startedAt));
   const perSource = () => Math.min(BUDGET.perSourceMs, remaining());
@@ -137,7 +122,7 @@ export async function analyze(
             `Registration belongs to ${input.providerSuffix?.provider}, not to this name`,
           )
         : runCollector('rdap', undefined, () =>
-            collectRdap(input.domain, input.suffix, layered, perSource()),
+            collectRdap(input.domain, input.suffix, perSource()),
           ),
     ),
   ]);

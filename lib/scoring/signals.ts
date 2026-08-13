@@ -351,26 +351,6 @@ export const SIGNALS: readonly SignalDefinition[] = [
       return null;
     },
   },
-  {
-    id: 'economics.unpriced_suffix',
-    dimension: 'economics',
-    label: 'Suffix absent from the reference price list',
-    rationale:
-      'The price list is one registrar\u2019s catalogue, so it describes the mainstream retail market rather than every suffix in existence. Absence from it has two explanations that point in opposite directions: the suffix may not be openly registrable at all, which is a positive, or it may be sold only by registrars local to its registry, which is where the cheapest namespaces in existence live. Nothing distinguishes those two cases from a price list that does not carry the suffix, so this is reported for the reader and deliberately scores zero.',
-    weight: (cfg) => fixed(cfg.economics.unpricedSuffix),
-    evaluate(facts, cfg) {
-      if (!registrationApplies(facts)) return null;
-      if (!facts.pricing?.unpriced) return null;
-      // Accreditation already establishes that this suffix is not openly registrable, and says so with a
-      // positive score. Repeating it as an open question would be worse than silence.
-      if (facts.meta.vettedSuffix) return null;
-      return {
-        points: cfg.economics.unpricedSuffix,
-        evidence: `No mainstream registrar publishes a price for the .${facts.pricing.suffix} suffix. It may not be openly registrable, or it may be sold only by registrars local to its registry, so its registration cost could not be established either way`,
-        sourceUrl: sourceUrlFor(facts, 'pricing'),
-      };
-    },
-  },
   /*
    * There is deliberately no standalone penalty for a free subdomain, and no second credit for a vetted
    * suffix in this dimension.
@@ -523,86 +503,15 @@ export const SIGNALS: readonly SignalDefinition[] = [
    * with nothing beside it — but it earns no points in either direction on its own.
    */
   /*
-   * The credits below all score zero, and each is kept rather than deleted because it remains a fact
-   * worth showing next to a verdict.
+   * SPF presence, DMARC policy, strict alignment and an explicit subdomain policy are no longer
+   * signals. They were zeroed in 1.3.0 under the rule that a credit is paid only where somebody other
+   * than the domain confirms it, and each is a tag the domain writes about itself with nothing checking
+   * it. All four are still collected and still shown, as observations rather than as heuristics
+   * weighted at nothing: see `lib/scoring/observations.ts`.
    *
-   * They were withdrawn together in 1.3.0 under one rule: a credit is paid only where somebody other
-   * than the domain confirms it. Every one of these is a string the domain publishes in its own zone,
-   * and nothing in the model checked any of them against the party they name. That made the whole
-   * group free to assert, and free to assert is the one thing the threat model says an account farmer
-   * will do at scale — the dimension was measuring what an operator was willing to type.
-   *
-   * Absence was never penalised here and still is not. The change is that presence no longer pays,
-   * which leaves the affirmative misconfigurations as the only signals in the dimension that move a
-   * score. See `docs/SCORING.md`.
+   * What is left in this dimension is what a third party has to agree to, plus the affirmative
+   * misconfigurations. Absence is never penalised here.
    */
-  {
-    id: 'mail.spf_present',
-    dimension: 'mail',
-    label: 'SPF published',
-    rationale:
-      'An SPF record shows someone thought about how this domain sends mail, and it is near-universal among senders. It scores nothing because it is a TXT record the domain writes about itself, with no cost and nothing corroborating it. Reported because a reader wants to see it; absence is not penalised either.',
-    weight: (cfg) => fixed(cfg.mail.spfPresent),
-    evaluate(facts, cfg) {
-      if (!facts.mail?.spf) return null;
-      return {
-        points: cfg.mail.spfPresent,
-        evidence: 'An SPF policy is published',
-        sourceUrl: sourceUrlFor(facts, 'dns'),
-      };
-    },
-  },
-  {
-    id: 'mail.dmarc_policy',
-    dimension: 'mail',
-    label: 'DMARC policy',
-    rationale:
-      'DMARC presence stopped discriminating once bulk-sender rules pushed everyone to publish it, and abusers set the strictest policy precisely because it is free and looks reputable. That argument was always in the model and the weight contradicted it, so the policy now scores nothing in either direction and is reported as a fact.',
-    weight: (cfg) =>
-      spanning([cfg.mail.dmarcMonitorOnly, cfg.mail.dmarcEnforcing], 'by how strict the policy is'),
-    evaluate(facts, cfg) {
-      const policy = facts.mail?.dmarcPolicy;
-      if (!policy) return null;
-      const enforcing = policy === 'reject' || policy === 'quarantine';
-      return {
-        points: enforcing ? cfg.mail.dmarcEnforcing : cfg.mail.dmarcMonitorOnly,
-        evidence: `DMARC published with p=${policy}`,
-        sourceUrl: sourceUrlFor(facts, 'dns'),
-      };
-    },
-  },
-  {
-    id: 'mail.strict_alignment',
-    dimension: 'mail',
-    label: 'DMARC strict alignment',
-    rationale:
-      'Strict alignment breaks mail that has not been deliberately configured, so publishing it was read as evidence that someone tested their sending. It scores nothing because that inference cannot be checked: adding two characters to a DMARC record is free whether or not any mail was ever sent, and a domain that never sends breaks nothing by requiring it.',
-    weight: (cfg) => fixed(cfg.mail.strictAlignment),
-    evaluate(facts, cfg) {
-      if (!facts.mail?.dmarcStrictAlignment) return null;
-      return {
-        points: cfg.mail.strictAlignment,
-        evidence: 'DMARC requires strict alignment',
-        sourceUrl: sourceUrlFor(facts, 'dns'),
-      };
-    },
-  },
-  {
-    id: 'mail.subdomain_policy',
-    dimension: 'mail',
-    label: 'Explicit DMARC subdomain policy',
-    rationale:
-      'Setting a separate subdomain policy was read as a detail only an operator thinking about their whole namespace would bother with. It scores nothing: it is one more tag in a record the domain writes about itself, and it costs a throwaway domain nothing to include.',
-    weight: (cfg) => fixed(cfg.mail.explicitSubdomainPolicy),
-    evaluate(facts, cfg) {
-      if (!facts.mail?.dmarcSubdomainPolicy) return null;
-      return {
-        points: cfg.mail.explicitSubdomainPolicy,
-        evidence: `DMARC sets an explicit subdomain policy of sp=${facts.mail.dmarcSubdomainPolicy}`,
-        sourceUrl: sourceUrlFor(facts, 'dns'),
-      };
-    },
-  },
   {
     id: 'mail.commercial_rua',
     dimension: 'mail',
@@ -623,23 +532,6 @@ export const SIGNALS: readonly SignalDefinition[] = [
       return {
         points: cfg.mail.commercialRua,
         evidence: `${vendor} publishes the record authorising this domain to send aggregate reports to it`,
-        sourceUrl: sourceUrlFor(facts, 'dns'),
-      };
-    },
-  },
-  {
-    id: 'mail.paid_spf_senders',
-    dimension: 'mail',
-    label: 'SPF authorises paid sending platforms',
-    rationale:
-      'Naming commercial sending platforms in SPF was read as evidence that someone pays per message to send from this domain. It scores nothing because the record proves no such relationship: an SPF include is a string, the platform is not consulted, and authorising a sender you have no account with costs nothing and breaks nothing.',
-    weight: (cfg) => fixed(cfg.mail.paidSpfSenders),
-    evaluate(facts, cfg) {
-      const vendors = facts.mail?.spfPaidSenders ?? [];
-      if (vendors.length === 0) return null;
-      return {
-        points: cfg.mail.paidSpfSenders,
-        evidence: `SPF authorises ${vendors.join(', ')}`,
         sourceUrl: sourceUrlFor(facts, 'dns'),
       };
     },
@@ -783,43 +675,16 @@ export const SIGNALS: readonly SignalDefinition[] = [
   // ---------------------------------------------------------------------------------------------
   // Organisational footprint: positive-only.
   // ---------------------------------------------------------------------------------------------
-  {
-    id: 'footprint.saas_vendors',
-    dimension: 'footprint',
-    label: 'Distinct SaaS vendors verified against this domain',
-    rationale:
-      'Each verification record was read as the residue of someone completing a domain-verification step inside a paid product, which made the count of distinct vendors a proxy for organisational spend. The residue is indistinguishable from the thing itself: the census matches a TXT prefix, no vendor publishes any way to confirm a token it issued, and invented strings count the same as real ones. It scores nothing and is reported, since a reader can weigh the named vendors themselves.',
-    weight: (cfg) =>
-      spanning(cfg.footprint.saasVendorTiers.map((tier) => tier.points), 'by how many vendors'),
-    evaluate(facts, cfg) {
-      const vendors = facts.mail?.saasVendors ?? [];
-      if (vendors.length === 0) return null;
-      const tier = cfg.footprint.saasVendorTiers.find((entry) => vendors.length >= entry.atLeast);
-      if (!tier) return null;
-      return {
-        points: tier.points,
-        evidence: `${vendors.length} distinct vendors verified: ${vendors.slice(0, 8).join(', ')}${vendors.length > 8 ? ', and others' : ''}`,
-        sourceUrl: sourceUrlFor(facts, 'dns'),
-      };
-    },
-  },
-  {
-    id: 'footprint.dkim',
-    dimension: 'footprint',
-    label: 'DKIM signing keys published',
-    rationale:
-      'Published signing keys were read as evidence that mail from this domain is actually signed, which requires configuration on the sending platform as well as in DNS. Only the DNS half is observable, and that half is free: generating a keypair and publishing the public half is one command, and nothing here verifies that any message was ever signed with it. It scores nothing. Selectors cannot be enumerated, so finding none proves nothing either.',
-    weight: (cfg) => fixed(cfg.footprint.dkimPresent),
-    evaluate(facts, cfg) {
-      const selectors = facts.mail?.dkimSelectors ?? [];
-      if (selectors.length === 0) return null;
-      return {
-        points: cfg.footprint.dkimPresent,
-        evidence: `DKIM keys published at ${selectors.length} known selector${selectors.length === 1 ? '' : 's'}`,
-        sourceUrl: sourceUrlFor(facts, 'dns'),
-      };
-    },
-  },
+  /*
+   * The SaaS vendor census and DKIM key presence are no longer signals. Both were zeroed in 1.3.0 for
+   * the same reason — a TXT prefix match and a freely generated keypair are things a domain asserts
+   * about itself — and both are still collected and shown as observations rather than as heuristics
+   * weighted at nothing. See `lib/scoring/observations.ts`.
+   *
+   * DNSSEC is what is left, and it is the reason the dimension still exists: the resolver validated the
+   * chain cryptographically, so the AD flag is somebody else's arithmetic rather than the domain's own
+   * claim.
+   */
   /*
    * There is deliberately no credit for standard business services being configured.
    *

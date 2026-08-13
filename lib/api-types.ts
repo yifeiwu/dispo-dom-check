@@ -1,6 +1,7 @@
 import type { SourceId } from './collector';
 import type { CombinationResult } from './scoring/combinations';
 import type { DimensionSubtotal, ReasonFlag } from './scoring/score';
+import type { ObservationResult } from './scoring/observations';
 import type { SignalResult } from './scoring/signals';
 import type { SourceStatus } from './facts';
 import type { ProviderSuffix } from './data/provider-suffixes';
@@ -27,6 +28,7 @@ export type AnalyzeResponse = {
   dimensions: DimensionSubtotal[];
   signals: SignalResult[];
   inapplicableSignals: { id: string; label: string; rationale: string }[];
+  observations: ObservationResult[];
   combinations: CombinationResult[];
   sources: SourceStatus[];
   providerSuffix?: ProviderSuffix;

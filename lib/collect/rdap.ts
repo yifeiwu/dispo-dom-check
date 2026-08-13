@@ -2,7 +2,6 @@ import { fetchJson } from '../fetch';
 import { withBackgroundRefresh } from '../reference-cache';
 import { UnsupportedError } from '../collector';
 import { derivePeriods, isPrivacyService } from './registration';
-import type { AnalysisCache } from '../cache';
 import type { RegistrationFacts } from '../facts';
 
 /**
@@ -28,15 +27,10 @@ type Bootstrap = {
 };
 
 /** Static reference data covering roughly 1200 suffixes, so it is fetched once per process. */
-async function loadBootstrap(cache: AnalysisCache, timeoutMs: number): Promise<Bootstrap> {
-  const cached = await cache.get<Bootstrap>(BOOTSTRAP_CACHE_KEY);
-  if (cached) return cached;
-
-  return withBackgroundRefresh(BOOTSTRAP_CACHE_KEY, BOOTSTRAP_TTL_SECONDS, timeoutMs, async () => {
-    const bootstrap = await fetchJson<Bootstrap>(BOOTSTRAP_URL, { timeoutMs: 15_000 });
-    await cache.set(BOOTSTRAP_CACHE_KEY, bootstrap, BOOTSTRAP_TTL_SECONDS);
-    return bootstrap;
-  });
+async function loadBootstrap(timeoutMs: number): Promise<Bootstrap> {
+  return withBackgroundRefresh(BOOTSTRAP_CACHE_KEY, BOOTSTRAP_TTL_SECONDS, timeoutMs, () =>
+    fetchJson<Bootstrap>(BOOTSTRAP_URL, { timeoutMs: 15_000 }),
+  );
 }
 
 /** Finds the RDAP base URL for a suffix, preferring the longest matching suffix entry. */
@@ -114,10 +108,9 @@ function eventDate(events: RdapEvent[] | undefined, action: string): string | un
 export async function collectRdap(
   domain: string,
   suffix: string,
-  cache: AnalysisCache,
   timeoutMs: number,
 ): Promise<{ facts: RegistrationFacts; sourceUrl: string }> {
-  const bootstrap = await loadBootstrap(cache, Math.floor(timeoutMs / 2));
+  const bootstrap = await loadBootstrap(Math.floor(timeoutMs / 2));
   const base = findRdapBase(bootstrap, suffix);
 
   if (!base) {
