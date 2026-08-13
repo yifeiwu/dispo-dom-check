@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
-import { analyze, type AnalysisResult } from '@/lib/analyze';
+import { analyze } from '@/lib/analyze';
 import { normaliseInput, type NormalisedInput } from '@/lib/domain';
-import { NDJSON_MEDIA_TYPE, type AnalyzeResponse, type AnalyzeStreamEvent } from '@/lib/api-types';
+import { toAnalyzeResponse, toOutOfScopeResponse } from '@/lib/api-response';
+import { NDJSON_MEDIA_TYPE, type AnalyzeStreamEvent } from '@/lib/api-types';
 import { encodeLine } from '@/lib/ndjson';
-import { VERDICT_DESCRIPTIONS, VERDICT_LABELS } from '@/lib/scoring/verdict';
-import { DEFAULT_CONFIG } from '@/lib/scoring/weights';
 
 /**
  * The analysis endpoint.
@@ -99,14 +98,7 @@ async function handle(raw: string, request: Request): Promise<Response> {
   }
 
   if (input.kind === 'out_of_scope') {
-    return NextResponse.json({
-      domain: input.domain,
-      outOfScope: { reason: input.reason, explanation: input.explanation },
-      verdict: 'out_of_scope',
-      verdictLabel: VERDICT_LABELS.out_of_scope,
-      verdictDescription: VERDICT_DESCRIPTIONS.out_of_scope,
-      modelVersion: DEFAULT_CONFIG.modelVersion,
-    });
+    return NextResponse.json(toOutOfScopeResponse(input));
   }
 
   if (wantsStream(request)) return streamed(input);
@@ -114,7 +106,7 @@ async function handle(raw: string, request: Request): Promise<Response> {
   try {
     const result = await analyze(input);
 
-    return NextResponse.json(toResponse(result), {
+    return NextResponse.json(toAnalyzeResponse(result), {
       // Never cached: a fresh lookup per request is the current requirement, and a stale verdict on a
       // domain that was clean last week is worse than a slow one.
       headers: { 'cache-control': 'no-store' },
@@ -153,7 +145,7 @@ function streamed(input: Extract<NormalisedInput, { kind: 'ok' }>): Response {
         const result = await analyze(input, {
           onSource: (status) => send({ type: 'source', ...status }),
         });
-        send({ type: 'result', ...toResponse(result) });
+        send({ type: 'result', ...toAnalyzeResponse(result) });
       } catch (error) {
         send({ type: 'error', ...FAULT, detail: detailOf(error) });
       } finally {
@@ -175,39 +167,6 @@ function streamed(input: Extract<NormalisedInput, { kind: 'ok' }>): Response {
 
 function wantsStream(request: Request): boolean {
   return request.headers.get('accept')?.includes(NDJSON_MEDIA_TYPE) ?? false;
-}
-
-/**
- * The success payload, built in one place so the streaming and non-streaming forms of the endpoint
- * cannot drift into describing the same analysis differently.
- */
-function toResponse(result: AnalysisResult): AnalyzeResponse {
-  return {
-    domain: result.domain,
-    submittedHost: result.submittedHost,
-    // Reported so the UI can state plainly that the local part was discarded and never stored.
-    inputWasEmailAddress: result.fromEmailAddress,
-    analysedAt: result.analysedAt,
-    elapsedMs: result.elapsedMs,
-    modelVersion: result.score.modelVersion,
-    legitimacy: result.score.legitimacy,
-    risk: result.score.risk,
-    confidence: result.score.confidence,
-    verdict: result.score.verdict,
-    verdictLabel: VERDICT_LABELS[result.score.verdict],
-    verdictDescription: VERDICT_DESCRIPTIONS[result.score.verdict],
-    narrative: result.score.narrative,
-    flags: result.score.flags,
-    firstSeen: result.score.firstSeen,
-    ageDays: result.score.ageDays,
-    dimensions: result.score.dimensions,
-    signals: result.score.signals,
-    inapplicableSignals: result.score.inapplicableSignals,
-    observations: result.score.observations,
-    combinations: result.score.combinations,
-    sources: result.facts.sources,
-    providerSuffix: result.facts.meta.providerSuffix,
-  };
 }
 
 const FAULT = {

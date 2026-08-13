@@ -1,3 +1,6 @@
+import { normaliseHostname } from '../hostname';
+import type { RegistrationFacts } from '../facts';
+
 /**
  * The parts of a registration record that are derived rather than read.
  *
@@ -74,4 +77,61 @@ export function isPrivacyService(org: string | undefined): boolean | undefined {
   if (!org) return undefined;
   const lowered = org.toLowerCase();
   return PRIVACY_ORG_MARKERS.some((marker) => lowered.includes(marker));
+}
+
+/**
+ * What each collector has after parsing its own wire format, before the derived fields are added.
+ *
+ * `statuses` arrives already tokenised, because that step is genuinely protocol-specific and must stay
+ * so: RDAP publishes `client transfer prohibited` with spaces, while port-43 publishes
+ * `clientTransferProhibited https://icann.org/epp#clientTransferProhibited` and has to be cut at the
+ * first token. They converge on one vocabulary by different routes, and collapsing them into a single
+ * normaliser would break whichever format it was not written for.
+ */
+export type ParsedRegistration = {
+  via: RegistrationFacts['via'];
+  creation?: string;
+  expiry?: string;
+  lastChanged?: string;
+  /** Already lowercased and tokenised by the caller. */
+  statuses: readonly string[];
+  registrar?: string;
+  registrarIanaId?: string;
+  registrantOrg?: string;
+  /** Raw exchange names; normalised and deduplicated here. */
+  nameservers: readonly (string | undefined)[];
+};
+
+/**
+ * Assembles a registration record from either protocol.
+ *
+ * RDAP and WHOIS reach the same nine fields by entirely different routes, and each used to finish by
+ * writing out the same object literal. Two copies of an assembly step is how the two sources drift
+ * into disagreeing about a domain for reasons that have nothing to do with what the registry said —
+ * which is the same argument `derivePeriods` was already extracted on, applied to the rest of the
+ * record.
+ */
+export function buildRegistrationFacts(
+  parsed: ParsedRegistration,
+  now: number = Date.now(),
+): RegistrationFacts {
+  return {
+    via: parsed.via,
+    creation: parsed.creation,
+    expiry: parsed.expiry,
+    lastChanged: parsed.lastChanged,
+    statuses: [...parsed.statuses],
+    registrar: parsed.registrar,
+    registrarIanaId: parsed.registrarIanaId,
+    registrantOrg: parsed.registrantOrg,
+    registrantIsPrivacyService: isPrivacyService(parsed.registrantOrg),
+    nameservers: [
+      ...new Set(
+        parsed.nameservers
+          .map((value) => normaliseHostname(value))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ],
+    ...derivePeriods(parsed.creation, parsed.expiry, now),
+  };
 }

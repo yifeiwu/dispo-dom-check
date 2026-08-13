@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { collectSite } from '@/lib/collect/site';
-import { BUDGET, runCollector } from '@/lib/collector';
+import { BUDGET } from '@/lib/budget';
+import { runCollector } from '@/lib/collector';
+import { hang, page, restoreFetchBetweenTests, stubNetwork } from './helpers/network';
 
 /**
  * The site collector is the only one that makes two requests in sequence, and its two legs have to fit
@@ -11,35 +13,7 @@ import { BUDGET, runCollector } from '@/lib/collector';
  * These pin the arithmetic rather than the constants, so the shares can be retuned without editing them.
  */
 
-const originalFetch = globalThis.fetch;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  vi.restoreAllMocks();
-});
-
-/** A host that accepts the connection and then says nothing, which is what a timeout actually is. */
-function hang(signal: AbortSignal | null): Promise<Response> {
-  return new Promise((_, reject) => {
-    if (!signal) return;
-    signal.addEventListener('abort', () => reject(signal.reason ?? new Error('aborted')));
-  });
-}
-
-function stubNetwork(handler: (url: string, signal: AbortSignal | null) => Promise<Response>) {
-  const urls: string[] = [];
-  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    urls.push(url);
-    return handler(url, (init?.signal as AbortSignal | undefined) ?? null);
-  }) as unknown as typeof fetch;
-  return { urls };
-}
-
-const page = (title: string) =>
-  new Response(`<html><head><title>${title}</title></head><body>${'x '.repeat(400)}</body></html>`, {
-    status: 200,
-  });
+restoreFetchBetweenTests();
 
 // Small enough to keep the suite fast; the shares are proportional, so the arithmetic is the same.
 const BUDGET_MS = 1_200;

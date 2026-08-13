@@ -34,7 +34,7 @@ export const isLegitimate = (row: Row) => row.group === 'legitimate';
 export const isGraded = (row: Row) => row.group !== 'privacy';
 
 /** Graded groups first, so a report reads abuse, legitimate, then the ungraded remainder. */
-export function orderedLabels(rows: Row[]): { label: string; group: Group }[] {
+export function orderedLabels(rows: readonly Row[]): { label: string; group: Group }[] {
   const seen = new Map<string, Group>();
   for (const row of rows) if (!seen.has(row.label)) seen.set(row.label, row.group);
   return [...seen]

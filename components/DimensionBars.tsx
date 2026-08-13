@@ -1,4 +1,5 @@
 import { DIMENSION_LABELS } from '@/lib/api-types';
+import { signedPoints } from '@/lib/format';
 import type { DimensionSubtotal } from '@/lib/scoring/score';
 
 /**
@@ -57,8 +58,7 @@ export function DimensionBars({ dimensions }: { dimensions: DimensionSubtotal[] 
               </span>
 
               <span className="col-start-2 row-start-1 text-right text-xs tabular-nums sm:col-start-3">
-                {dimension.clamped > 0 ? '+' : ''}
-                {dimension.clamped}
+                {signedPoints(dimension.clamped)}
                 {dimension.clampApplied ? <span className="ml-0.5 text-ink-faint">*</span> : null}
               </span>
             </li>

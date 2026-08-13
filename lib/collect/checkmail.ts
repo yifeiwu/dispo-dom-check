@@ -1,4 +1,4 @@
-import { HttpError, RateLimitedError, UnsupportedError } from '../collector';
+import { HttpError, RateLimitedError, UnsupportedError } from '../errors';
 import type { CheckMailFacts } from '../facts';
 import { probe } from '../fetch';
 

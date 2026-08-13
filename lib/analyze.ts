@@ -1,16 +1,18 @@
-import { BUDGET, isOk, runCollector, type CollectorResult } from './collector';
+import { BUDGET } from './budget';
+import { isOk, runCollector, type CollectorResult, type SourceId } from './collector';
 import { collectDns } from './collect/dns';
 import { collectRdap } from './collect/rdap';
-import { collectWhois, type WhoisResult } from './collect/whois';
+import { collectWhois } from './collect/whois';
 import { collectMail } from './collect/mail';
 import { collectSignup } from './collect/signup';
-import { PRICING_SOURCE_URL, collectPricing } from './collect/pricing';
+import { collectPricing } from './collect/pricing';
 import { collectSite } from './collect/site';
-import { collectCheckMail, type CheckMailResult } from './collect/checkmail';
+import { collectCheckMail } from './collect/checkmail';
 import { detectRegistrarDefault } from './data/registrar-defaults';
 import { hasRecordingContext } from './record';
 import {
   toSourceStatus,
+  type CheckMailFacts,
   type DomainFacts,
   type PricingFacts,
   type RegistrationFacts,
@@ -117,13 +119,11 @@ export async function analyze(
     ),
     notify(
       providerScoped
-        ? skipped<{ facts: RegistrationFacts; sourceUrl: string }>(
+        ? skipped<RegistrationFacts>(
             'rdap',
             `Registration belongs to ${input.providerSuffix?.provider}, not to this name`,
           )
-        : runCollector('rdap', undefined, () =>
-            collectRdap(input.domain, input.suffix, perSource()),
-          ),
+        : runFactCollector('rdap', () => collectRdap(input.domain, input.suffix, perSource())),
     ),
   ]);
   record(dnsResult);
@@ -163,13 +163,8 @@ export async function analyze(
   const [whoisResult, mailResult, pricingResult, siteResult, checkmailResult] = await Promise.allSettled([
     notify(
       whoisApplies
-        ? runCollector(
-            'whois',
-            undefined,
-            () => collectWhois(input.domain, input.suffix, whoisMs),
-            whoisMs,
-          ).then(carryNotice)
-        : skipped<WhoisResult>(
+        ? runFactCollector('whois', () => collectWhois(input.domain, input.suffix, whoisMs), whoisMs)
+        : skipped<RegistrationFacts>(
             'whois',
             providerScoped
               ? `Registration belongs to ${input.providerSuffix?.provider}, not to this name`
@@ -183,12 +178,12 @@ export async function analyze(
     ),
     notify(
       providerScoped
-        ? skipped<{ facts: PricingFacts; sourceUrl: string }>(
+        ? skipped<PricingFacts>(
             'pricing',
             `This name has no registry price: it was issued by ${input.providerSuffix?.provider}`,
           )
         : // A committed snapshot rather than a network call, so this needs no deadline of its own.
-          runCollector('pricing', PRICING_SOURCE_URL, async () => collectPricing(input.suffix)),
+          runFactCollector('pricing', async () => collectPricing(input.suffix)),
     ),
     notify(
       runCollector(
@@ -213,16 +208,15 @@ export async function analyze(
      */
     notify(
       hasRecordingContext()
-        ? skipped<CheckMailResult>(
+        ? skipped<CheckMailFacts>(
             'checkmail',
             'Metered source, not queried during a recorded or replayed run',
           )
-        : runCollector(
+        : runFactCollector(
             'checkmail',
-            undefined,
             () => collectCheckMail(input.domain, checkmailMs),
             checkmailMs,
-          ).then(carryNotice),
+          ),
     ),
   ]);
 
@@ -233,7 +227,7 @@ export async function analyze(
   const checkmail = settled(checkmailResult, record);
 
   // One field regardless of protocol, so every registration signal reads the same shape.
-  const registration = (isOk(rdapResult) ? rdapResult.data : undefined)?.facts ?? whois?.facts;
+  const registration = (isOk(rdapResult) ? rdapResult.data : undefined) ?? whois;
 
   // Mail classification depends on both DNS and the parsed SPF record, so it runs last and cheaply.
   const signupResult = await notify(
@@ -261,9 +255,9 @@ export async function analyze(
     mail,
     signup,
     registrarDefault: detectRegistrarDefault(registration, dns, signup),
-    pricing: pricing?.facts,
+    pricing,
     site,
-    checkmail: checkmail?.facts,
+    checkmail,
     name: nameFacts(input.label),
     sources,
   };
@@ -280,22 +274,35 @@ export async function analyze(
 }
 
 /**
- * Carries a collector's own note onto an `ok` status, for the two sources that can answer fully and
- * still have something the reader needs told.
+ * Runs a collector that returns an envelope around its facts, and flattens it into the result.
  *
- * A registry can publish no registration date, and without the note the panel would read "answered"
- * beside an empty age dimension and leave the reader to work out which of the two was at fault. The
- * metered reputation source reports how much of its monthly allowance is left, which is only useful
- * while there is still some.
+ * The collectors come in two shapes. Most return their facts alone, because the orchestrator already
+ * knows where they went; the registration and reputation sources cannot, because they resolve their
+ * own endpoint — RDAP per suffix, WHOIS per registry — or have something to say about an answer they
+ * did give. Both extras belong on the `CollectorResult` rather than inside the facts, so they are
+ * lifted here.
  *
- * Applied to the promise rather than at the point of recording, so a caller watching sources settle is
- * told the same thing as a caller reading the finished result.
+ * `notice` becoming `reason` is the part worth naming. A registry can answer in full and publish no
+ * registration date, and without the note the source panel would read "answered" beside an empty age
+ * dimension, leaving the reader to work out which of the two was at fault. The metered reputation
+ * source reports how much of its monthly allowance is left, which is only useful while there is some.
+ *
+ * With the envelope gone, every source in this function yields its facts directly, and the reader no
+ * longer has to remember which half of them needed a `.facts` on the end.
  */
-function carryNotice<T extends { notice?: string }>(
-  result: CollectorResult<T>,
-): CollectorResult<T> {
-  if (result.status !== 'ok' || !result.data?.notice) return result;
-  return { ...result, reason: result.data.notice };
+async function runFactCollector<T>(
+  source: SourceId,
+  fn: () => Promise<{ facts: T; sourceUrl?: string; notice?: string }>,
+  timeoutMs?: number,
+): Promise<CollectorResult<T>> {
+  const { data, ...rest } = await runCollector(source, undefined, fn, timeoutMs);
+  if (!data) return rest;
+  return {
+    ...rest,
+    data: data.facts,
+    sourceUrl: data.sourceUrl ?? rest.sourceUrl,
+    reason: data.notice ?? rest.reason,
+  };
 }
 
 /**

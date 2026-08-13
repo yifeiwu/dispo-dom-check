@@ -1,0 +1,44 @@
+/**
+ * The failure vocabulary shared by everything that talks to the network.
+ *
+ * These live apart from `lib/collector.ts` because both the HTTP transport and the recorder throw and
+ * classify them, and neither has any business depending on the orchestrator. Held together in one
+ * module because they are meaningful only as a set: `runCollector` and `lib/record.ts` each match on
+ * the whole list, so a fifth error added to one of those chains and not the other is the failure mode
+ * this grouping is meant to make obvious.
+ */
+
+export class TimeoutError extends Error {
+  constructor(ms: number) {
+    super(`exceeded ${ms}ms deadline`);
+    this.name = 'TimeoutError';
+  }
+}
+
+export class RateLimitedError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = 'RateLimitedError';
+  }
+}
+
+/** A source that does not apply to this domain at all, e.g. a TLD with no RDAP service. */
+export class UnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnsupportedError';
+  }
+}
+
+export class HttpError extends Error {
+  constructor(
+    readonly statusCode: number,
+    url: string,
+  ) {
+    super(`HTTP ${statusCode} from ${new URL(url).host}`);
+    this.name = 'HttpError';
+  }
+}

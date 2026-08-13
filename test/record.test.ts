@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { exists, fetchJson, fetchText, probe } from '@/lib/fetch';
+import { fetchJson, fetchText, probe } from '@/lib/fetch';
 import { TranscriptMissError, withHttpRecording, withHttpReplay } from '@/lib/record';
-import { HttpError, RateLimitedError } from '@/lib/collector';
+import { HttpError, RateLimitedError } from '@/lib/errors';
 
 /**
  * The recorder exists so that an expensive collection run survives a change to the collectors. These
@@ -97,28 +97,6 @@ describe('response recording', () => {
     expect(replayed.value.status).toBe(recorded.value.status);
     expect(replayed.value.body).toBe('<title>Hello</title>');
     expect(replayed.value.headers.get('content-type')).toBe('text/html');
-  });
-
-  it('round-trips an absent resource as absence rather than as an error', async () => {
-    stubFetch(() => {
-      throw new Error('connection refused');
-    });
-
-    const recorded = await withHttpRecording(() => exists('https://site.example/robots.txt', 500));
-    expect(recorded.value).toBeNull();
-
-    const replayed = await withHttpReplay([recorded.transcript], () => exists('https://site.example/robots.txt', 500));
-    expect(replayed.value).toBeNull();
-  });
-
-  it('keeps an existence check answerable when the recording has no entry for it', async () => {
-    // `exists` never throws by contract, and a missing record must not be the one thing that makes it.
-    const { transcript } = await withHttpRecording(async () => undefined);
-
-    const replayed = await withHttpReplay([transcript], () => exists('https://site.example/robots.txt', 500));
-
-    expect(replayed.value).toBeNull();
-    expect(replayed.misses).toHaveLength(1);
   });
 
   it('reports a request the recording never saw instead of quietly fetching it', async () => {

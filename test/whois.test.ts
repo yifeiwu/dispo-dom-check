@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { collectWhois, parseWhois, parseWhoisDate } from '@/lib/collect/whois';
 import { findWhoisServer } from '@/lib/data/whois-servers';
 import { derivePeriods } from '@/lib/collect/registration';
-import { BUDGET, UnsupportedError } from '@/lib/collector';
+import { BUDGET } from '@/lib/budget';
+import { UnsupportedError } from '@/lib/errors';
 
 /**
  * The WHOIS parser is the one place in the system reading an unversioned text format that differs per

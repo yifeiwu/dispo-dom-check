@@ -2,10 +2,11 @@
 
 import { useCallback, useId, useMemo, useState, type ReactNode } from 'react';
 import { DIMENSION_LABELS } from '@/lib/api-types';
+import { signedPoints } from '@/lib/format';
 import { glossaryFor } from '@/lib/glossary';
 import type { CombinationResult } from '@/lib/scoring/combinations';
 import type { ObservationResult } from '@/lib/scoring/observations';
-import type { DimensionSubtotal } from '@/lib/scoring/score';
+import type { DimensionSubtotal, InapplicableSignal } from '@/lib/scoring/score';
 import type { SignalResult } from '@/lib/scoring/signals';
 
 /**
@@ -19,12 +20,29 @@ import type { SignalResult } from '@/lib/scoring/signals';
  * one that was reported without ever being scored, and one that never had anything to measure are three
  * different claims, and only the first is asking for the reader's attention.
  */
+/**
+ * The wiring that makes a show/hide control announce itself, in one place.
+ *
+ * Two disclosures render in this file — a signal row and a collapsible group — and they share no
+ * markup at all, so this returns props rather than a component. What it centralises is the part that
+ * is easy to get wrong and invisible when it is: the panel keeps a stable id and stays mounted while
+ * hidden, so `aria-controls` always names an element that exists. Pointing it at a conditionally
+ * rendered panel is the usual way this pattern breaks, and it leaves a screen reader announcing a
+ * control over a missing target. Written twice, it only has to be corrected once to start differing.
+ */
+function useDisclosure(open: boolean) {
+  const panelId = useId();
+  return {
+    triggerProps: { 'aria-expanded': open, 'aria-controls': panelId },
+    panelProps: { id: panelId, hidden: !open },
+  };
+}
+
 function Points({ points }: { points: number }) {
   const tone = points > 0 ? 'text-accent' : points < 0 ? 'text-danger' : 'text-ink-faint';
   return (
     <span className={`shrink-0 tabular-nums text-sm font-medium ${tone}`}>
-      {points > 0 ? '+' : ''}
-      {Math.round(points * 10) / 10}
+      {signedPoints(Math.round(points * 10) / 10)}
     </span>
   );
 }
@@ -85,10 +103,7 @@ function Row({
   open: boolean;
   onToggle: () => void;
 }) {
-  // The panel stays mounted and hidden rather than being conditionally rendered, so `aria-controls`
-  // always names an element that exists. Pointing it at nothing while collapsed is the usual way this
-  // pattern is got wrong, and it leaves a screen reader announcing a control over a missing target.
-  const panelId = useId();
+  const { triggerProps, panelProps } = useDisclosure(open);
 
   return (
     <li className="rise border-b border-edge last:border-0">
@@ -96,8 +111,7 @@ function Row({
         type="button"
         onClick={onToggle}
         className="-mx-2 flex w-[calc(100%+1rem)] items-start gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-white/[0.03]"
-        aria-expanded={open}
-        aria-controls={panelId}
+        {...triggerProps}
       >
         <svg
           aria-hidden
@@ -125,7 +139,7 @@ function Row({
         <Points points={points} />
       </button>
 
-      <div id={panelId} hidden={!open} className="pb-4 pl-6 pr-2">
+      <div {...panelProps} className="pb-4 pl-6 pr-2">
         <p className="text-sm leading-relaxed text-ink-muted">
           <span className="font-medium text-ink">Why this matters. </span>
           {rationale}
@@ -151,7 +165,7 @@ function Collapsible({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const panelId = useId();
+  const { triggerProps, panelProps } = useDisclosure(open);
   const descriptionId = useId();
 
   return (
@@ -160,8 +174,7 @@ function Collapsible({
         type="button"
         onClick={() => setOpen((value) => !value)}
         className="text-sm text-ink-muted underline decoration-dotted underline-offset-4 hover:text-ink"
-        aria-expanded={open}
-        aria-controls={panelId}
+        {...triggerProps}
         aria-describedby={descriptionId}
       >
         {summary(open)}
@@ -171,9 +184,7 @@ function Collapsible({
       <p id={descriptionId} className="mt-1 text-sm text-ink-faint">
         {description}
       </p>
-      <div id={panelId} hidden={!open}>
-        {children}
-      </div>
+      <div {...panelProps}>{children}</div>
     </section>
   );
 }
@@ -193,7 +204,7 @@ export function SignalRows({
   signals: SignalResult[];
   combinations: CombinationResult[];
   observations: ObservationResult[];
-  inapplicable: { id: string; label: string; rationale: string }[];
+  inapplicable: InapplicableSignal[];
   dimensions: DimensionSubtotal[];
 }) {
   const scoring = signals.filter((signal) => signal.points !== 0);

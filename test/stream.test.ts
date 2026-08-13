@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { analyze } from '@/lib/analyze';
 import { normaliseInput } from '@/lib/domain';
-import { createLineParser, encodeLine } from '@/lib/ndjson';
+import { createLineParser, encodeLine, readNdjsonStream } from '@/lib/ndjson';
 import type { AnalyzeStreamEvent } from '@/lib/api-types';
 import type { SourceStatus } from '@/lib/facts';
 
@@ -97,6 +97,51 @@ describe('ndjson framing', () => {
 
     expect(parser.push('{"n":1}\n{"trunc')).toEqual([{ n: 1 }]);
     expect(parser.flush()).toEqual([]);
+  });
+});
+
+const encoder = new TextEncoder();
+
+/** Serves `chunks` as separate reads, which is what a network does and a single `Response` does not. */
+function chunked(...chunks: Uint8Array[]): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  });
+}
+
+async function collect<T>(stream: ReadableStream<Uint8Array>): Promise<T[]> {
+  const seen: T[] = [];
+  await readNdjsonStream<T>(stream, (event) => seen.push(event));
+  return seen;
+}
+
+describe('reading a stream', () => {
+  it('reports events in order as they arrive', async () => {
+    const stream = chunked(encoder.encode('{"n":1}\n{"n":2}\n'), encoder.encode('{"n":3}\n'));
+
+    expect(await collect(stream)).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }]);
+  });
+
+  /**
+   * The reason the decoder is held across reads rather than created per chunk. Evidence strings carry
+   * registrar and mark-holder names, so a multi-byte character landing on a packet boundary is not a
+   * hypothetical; decoded per chunk it becomes replacement characters and the name is corrupted.
+   */
+  it('reassembles a multi-byte character split across two reads', async () => {
+    const line = encoder.encode('{"name":"Bücher"}\n');
+    // `ü` is two bytes and starts at offset 10, so this cuts it in half.
+    const stream = chunked(line.slice(0, 11), line.slice(11));
+
+    expect(await collect(stream)).toEqual([{ name: 'Bücher' }]);
+  });
+
+  it('drops a line the stream was cut in the middle of', async () => {
+    const stream = chunked(encoder.encode('{"n":1}\n{"n":'));
+
+    expect(await collect(stream)).toEqual([{ n: 1 }]);
   });
 });
 

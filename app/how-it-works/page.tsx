@@ -4,6 +4,7 @@ import { SIGNALS, type WeightRange } from '@/lib/scoring/signals';
 import { VERDICT_DESCRIPTIONS, VERDICT_LABELS } from '@/lib/scoring/verdict';
 import { DEFAULT_CONFIG } from '@/lib/scoring/weights';
 import { DIMENSION_LABELS } from '@/lib/api-types';
+import { signedPoints as signed } from '@/lib/format';
 import type { Verdict } from '@/lib/scoring/weights';
 import type { ReactNode } from 'react';
 
@@ -60,8 +61,6 @@ function Section({
 }
 
 const dimensions = Object.keys(DEFAULT_CONFIG.clamps) as (keyof typeof DEFAULT_CONFIG.clamps)[];
-
-const signed = (points: number): string => `${points > 0 ? '+' : ''}${points}`;
 
 /** What the heuristic is worth at its strongest, which is what the list is ordered on. */
 const magnitude = (weight: WeightRange): number =>

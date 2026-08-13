@@ -1,4 +1,6 @@
+import { splitBudget } from '../budget';
 import { fetchJson } from '../fetch';
+import { normaliseHostname, parseMxRdata } from '../hostname';
 import type { DnsFacts } from '../facts';
 
 /**
@@ -107,12 +109,12 @@ function txtValues(answers: DohAnswer[]): string[] {
 function cnameTargets(answers: DohAnswer[]): string[] {
   return answers
     .filter((answer) => answer.type === RR.CNAME)
-    .map((answer) => answer.data.replace(/\.$/, '').toLowerCase())
-    .filter(Boolean);
+    .map((answer) => normaliseHostname(answer.data))
+    .filter((target): target is string => Boolean(target));
 }
 
 export async function collectDns(domain: string, timeoutMs: number): Promise<DnsFacts> {
-  const per = Math.max(1200, Math.floor(timeoutMs / 2));
+  const per = splitBudget(timeoutMs, 2);
 
   // Why the apex lookups failed, kept so the source reports the cause rather than a generic message.
   // Only the apex matters here: a subdomain probe that fails is an absence, not a broken source.
@@ -169,14 +171,12 @@ export async function collectDns(domain: string, timeoutMs: number): Promise<Dns
     aaaa: (aaaa?.answers ?? []).filter((r) => r.type === RR.AAAA).map((r) => r.data),
     ns: (ns?.answers ?? [])
       .filter((r) => r.type === RR.NS)
-      .map((r) => r.data.replace(/\.$/, '').toLowerCase()),
+      .map((r) => normaliseHostname(r.data))
+      .filter((host): host is string => Boolean(host)),
     mx: (mx?.answers ?? [])
       .filter((r) => r.type === RR.MX)
-      .map((r) => {
-        const [priority, host] = r.data.split(/\s+/);
-        return { priority: Number(priority) || 0, host: (host ?? '').replace(/\.$/, '').toLowerCase() };
-      })
-      .filter((entry) => entry.host.length > 0)
+      .map((r) => parseMxRdata(r.data))
+      .filter((entry): entry is { priority: number; host: string } => entry !== undefined)
       .sort((x, y) => x.priority - y.priority),
     txt: txtValues(txt?.answers ?? []),
     wwwExists: (www?.answers.length ?? 0) > 0,
@@ -202,8 +202,8 @@ export async function mxAt(name: string, timeoutMs: number): Promise<string[]> {
   const result = await query(name, 'MX', timeoutMs);
   return result.answers
     .filter((r) => r.type === RR.MX)
-    .map((r) => (r.data.split(/\s+/)[1] ?? '').replace(/\.$/, '').toLowerCase())
-    .filter(Boolean)
+    .map((r) => parseMxRdata(r.data)?.host)
+    .filter((host): host is string => Boolean(host))
     .sort();
 }
 

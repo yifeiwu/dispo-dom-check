@@ -1,5 +1,5 @@
-import { BUDGET } from '../collector';
-import { probe } from '../fetch';
+import { BUDGET } from '../budget';
+import { probe, type ProbeResult } from '../fetch';
 import { PARKING_BODY_FINGERPRINTS, PARKING_NAMESERVERS } from '../data/parking-ns';
 import { classifyRedirectTarget } from '../data/redirect-targets';
 import { detectPlatform } from '../data/site-platforms';
@@ -46,54 +46,31 @@ export async function collectSite(
   const parkingNs = (dns?.ns ?? []).flatMap((ns) =>
     PARKING_NAMESERVERS.filter(({ pattern }) => ns.includes(pattern)),
   );
+  const nsParkingEvidence = parkingNs[0]
+    ? `Delegated to ${parkingNs[0].provider} parking nameservers`
+    : undefined;
 
-  if (dns && dns.a.length === 0 && dns.aaaa.length === 0) {
-    return {
-      reachable: false,
-      redirectedOffDomain: false,
-      substantive: false,
-      parked: parkingNs.length > 0,
-      parkingEvidence: parkingNs[0] ? `Delegated to ${parkingNs[0].provider} parking nameservers` : undefined,
-      titleMatchesDomain: false,
-    };
-  }
-
-  const chainMs =
-    timeoutMs - Math.min(CHAIN_MARGIN_MS, Math.floor(timeoutMs * CHAIN_MARGIN_SHARE));
-  const startedAt = Date.now();
-  const unspent = () => chainMs - (Date.now() - startedAt);
-
-  // Proportional only when the budget is too small for the fixed share, which happens when the global
-  // deadline is already nearly spent.
-  const httpsMs = Math.min(HTTPS_LEG_MS, Math.floor(chainMs * 0.45));
-
-  /*
-   * The root, and nothing else. A parallel `robots.txt` probe used to run alongside it to feed a +2
-   * credit; the audit measured that credit firing on more legitimate domains than abuse ones and it was
-   * removed, so the request went with it. It cost no wall-clock time, being parallel, but it was a second
-   * connection to every domain analysed for a fact nothing now reads.
+  /**
+   * Nothing was served, so every content-derived field is unobserved rather than false. Delegation is
+   * still readable without a fetch, which is why parking survives into this answer.
+   *
+   * Reached two ways — a zone with no address at all, and a probe chain that never got a response —
+   * and they are the same finding, so they share one construction rather than two copies that have to
+   * be kept identical by hand.
    */
-  const root = await probe(`https://${domain}/`, {
-    timeoutMs: httpsMs,
-    redirect: 'follow',
-    maxBytes: BUDGET.maxBodyBytes,
-  }).catch(() => {
-    // Whatever the https leg did not spend, rather than a second fixed share that would not fit.
-    const fallbackMs = unspent();
-    if (fallbackMs < MIN_FALLBACK_MS) return null;
-    return probe(`http://${domain}/`, { timeoutMs: fallbackMs, redirect: 'follow' }).catch(() => null);
+  const unreachable = (): SiteFacts => ({
+    reachable: false,
+    redirectedOffDomain: false,
+    substantive: false,
+    parked: parkingNs.length > 0,
+    parkingEvidence: nsParkingEvidence,
+    titleMatchesDomain: false,
   });
 
-  if (!root) {
-    return {
-      reachable: false,
-      redirectedOffDomain: false,
-      substantive: false,
-      parked: parkingNs.length > 0,
-      parkingEvidence: parkingNs[0] ? `Delegated to ${parkingNs[0].provider} parking nameservers` : undefined,
-      titleMatchesDomain: false,
-    };
-  }
+  if (dns && dns.a.length === 0 && dns.aaaa.length === 0) return unreachable();
+
+  const root = await fetchRoot(domain, timeoutMs);
+  if (!root) return unreachable();
 
   const title = extractTitle(root.body);
   const text = visibleText(root.body);
@@ -104,12 +81,7 @@ export async function collectSite(
       root.body.toLowerCase().includes(fingerprint) || title?.toLowerCase().includes(fingerprint),
   );
 
-  let finalHost: string | undefined;
-  try {
-    finalHost = new URL(root.finalUrl).hostname;
-  } catch {
-    finalHost = undefined;
-  }
+  const finalHost = hostOf(root.finalUrl);
   const redirectedOffDomain = Boolean(
     finalHost && finalHost !== domain && !finalHost.endsWith(`.${domain}`),
   );
@@ -160,13 +132,14 @@ export async function collectSite(
     substantive:
       !redirectedOffDomain && okStatus && text.length >= SUBSTANTIVE_TEXT_THRESHOLD && Boolean(title),
     parked,
-    parkingEvidence: parkingNs[0]
-      ? `Delegated to ${parkingNs[0].provider} parking nameservers`
-      : bodyParking
+    // Delegation first, being the most reliable of the three, then the page, then where it went.
+    parkingEvidence:
+      nsParkingEvidence ??
+      (bodyParking
         ? `Page content matches a parking or placeholder fingerprint`
         : redirectParking
           ? `Redirects to ${redirectTarget?.provider ?? redirectTarget?.host} parking`
-          : undefined,
+          : undefined),
     titleMatchesDomain: Boolean(
       !redirectedOffDomain &&
         title &&
@@ -175,6 +148,48 @@ export async function collectSite(
     ),
     platform,
   };
+}
+
+/**
+ * The root page, over https and then http, as one chain inside one deadline.
+ *
+ * Separated from the classification above it so that the budget arithmetic is readable on its own:
+ * the two legs divide a single deadline rather than each claiming it whole, and the margin keeps the
+ * chain inside the deadline that is enforcing it.
+ *
+ * A parallel `robots.txt` probe used to run alongside this to feed a +2 credit; the audit measured
+ * that credit firing on more legitimate domains than abuse ones and it was removed, so the request
+ * went with it. It cost no wall-clock time, being parallel, but it was a second connection to every
+ * domain analysed for a fact nothing now reads.
+ */
+async function fetchRoot(domain: string, timeoutMs: number): Promise<ProbeResult | null> {
+  const chainMs =
+    timeoutMs - Math.min(CHAIN_MARGIN_MS, Math.floor(timeoutMs * CHAIN_MARGIN_SHARE));
+  const startedAt = Date.now();
+  const unspent = () => chainMs - (Date.now() - startedAt);
+
+  // Proportional only when the budget is too small for the fixed share, which happens when the global
+  // deadline is already nearly spent.
+  const httpsMs = Math.min(HTTPS_LEG_MS, Math.floor(chainMs * 0.45));
+
+  return probe(`https://${domain}/`, {
+    timeoutMs: httpsMs,
+    redirect: 'follow',
+    maxBytes: BUDGET.maxBodyBytes,
+  }).catch(() => {
+    // Whatever the https leg did not spend, rather than a second fixed share that would not fit.
+    const fallbackMs = unspent();
+    if (fallbackMs < MIN_FALLBACK_MS) return null;
+    return probe(`http://${domain}/`, { timeoutMs: fallbackMs, redirect: 'follow' }).catch(() => null);
+  });
+}
+
+function hostOf(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
 }
 
 function extractTitle(html: string): string | undefined {

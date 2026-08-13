@@ -1,4 +1,5 @@
 import { txtAt, txtAtFollowingCname } from './dns';
+import { splitBudget } from '../budget';
 import { fetchText } from '../fetch';
 import { parseBimiRecord, verifyVmc } from '../bimi-vmc';
 import {
@@ -57,7 +58,7 @@ export async function collectMail(
   dns: DnsFacts | undefined,
   timeoutMs: number,
 ): Promise<MailFacts> {
-  const per = Math.max(1200, Math.floor(timeoutMs / 2));
+  const per = splitBudget(timeoutMs, 2);
   const apexTxt = dns?.txt ?? [];
 
   const [dmarcRecords, dkimKeys] = await Promise.all([
@@ -284,28 +285,40 @@ async function probeDkimSelectors(
  * material would add cost to a fact the model reads but does not weigh.
  */
 function isDkimKeyRecord(record: string): boolean {
-  const tags = new Map<string, string>();
-  for (const part of record.split(';')) {
-    const index = part.indexOf('=');
-    if (index <= 0) continue;
-    tags.set(part.slice(0, index).trim().toLowerCase(), part.slice(index + 1).trim());
-  }
+  const tags = parseTagList(record, { lowercaseValues: false });
 
-  const version = tags.get('v');
+  const version = tags.v;
   if (version !== undefined && version.toLowerCase() !== 'dkim1') return false;
-  return (tags.get('p') ?? '').length > 0;
+  return (tags.p ?? '').length > 0;
 }
 
-/** Parses the `key=value;` grammar a DMARC record uses. */
-function parseTags(record: string | undefined): Record<string, string> {
+/**
+ * The `key=value;` grammar shared by the DMARC and DKIM record formats.
+ *
+ * `lowercaseValues` is the whole reason this takes an option rather than being one function. DMARC
+ * tag values are keywords and every reader here compares them lowercased, while a DKIM `p` tag is
+ * base64 key material where case is significant — folding it would corrupt the one field the record
+ * exists to carry. The two parsers were written separately and differed in exactly this way by
+ * accident of who wrote them first, which is a difference worth stating rather than rediscovering.
+ */
+function parseTagList(
+  record: string | undefined,
+  { lowercaseValues }: { lowercaseValues: boolean },
+): Record<string, string> {
   if (!record) return {};
   const tags: Record<string, string> = {};
   for (const part of record.split(';')) {
-    const [key, ...rest] = part.split('=');
-    if (!key || rest.length === 0) continue;
-    tags[key.trim().toLowerCase()] = rest.join('=').trim().toLowerCase();
+    const index = part.indexOf('=');
+    if (index <= 0) continue;
+    const value = part.slice(index + 1).trim();
+    tags[part.slice(0, index).trim().toLowerCase()] = lowercaseValues ? value.toLowerCase() : value;
   }
   return tags;
+}
+
+/** Parses the `key=value;` grammar a DMARC record uses, where every value is a keyword. */
+function parseTags(record: string | undefined): Record<string, string> {
+  return parseTagList(record, { lowercaseValues: true });
 }
 
 function normalisePolicy(value: string | undefined): MailFacts['dmarcPolicy'] {

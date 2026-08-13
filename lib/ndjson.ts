@@ -47,3 +47,36 @@ export function createLineParser<T>(): LineParser<T> {
     },
   };
 }
+
+/**
+ * Drains a response body, reporting each complete event as it arrives.
+ *
+ * This is the consumer half of the framing and belongs beside the producer half for the same reason
+ * `createLineParser` does: it was written inline in the page, where the one piece of it that is easy
+ * to get wrong could not be tested. That piece is the decoder. It is held across reads with
+ * `stream: true` so a multi-byte character split across two chunks is reassembled rather than turned
+ * into a replacement character — a per-chunk `decode` looks identical and corrupts any non-ASCII
+ * evidence string unlucky enough to straddle a packet boundary.
+ *
+ * Deliberately says nothing about which events are terminal. That is the endpoint's contract rather
+ * than the format's, and it stays with the caller that knows it.
+ */
+export async function readNdjsonStream<T>(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: T) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const parser = createLineParser<T>();
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      for (const event of parser.push(decoder.decode(value, { stream: true }))) onEvent(event);
+    }
+  } finally {
+    parser.flush();
+    reader.releaseLock();
+  }
+}

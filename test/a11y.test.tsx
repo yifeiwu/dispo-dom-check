@@ -8,7 +8,7 @@ import { StrictMode } from 'react';
 import Home from '@/app/page';
 import { establishedSmallBusiness } from './fixtures';
 import { score } from '@/lib/scoring/score';
-import { VERDICT_DESCRIPTIONS, VERDICT_LABELS } from '@/lib/scoring/verdict';
+import { toAnalyzeResponse, toOutOfScopeResponse } from '@/lib/api-response';
 import type { AnalyzeResponse, ErrorResponse, OutOfScopeResponse } from '@/lib/api-types';
 
 /**
@@ -28,47 +28,31 @@ import type { AnalyzeResponse, ErrorResponse, OutOfScopeResponse } from '@/lib/a
 
 const FIXTURE = establishedSmallBusiness();
 
-/** The route's `toResponse`, applied to an offline fixture so no test touches the network. */
+/**
+ * The endpoint's own response mapping, applied to an offline fixture so no test touches the network.
+ *
+ * Imported rather than reproduced. The copy that used to live here pinned a model version by hand and
+ * was two releases stale before anyone noticed, because nothing compared it to anything.
+ */
 function analysed(): AnalyzeResponse {
-  const result = score(FIXTURE);
-  return {
+  return toAnalyzeResponse({
     domain: 'example.com',
     submittedHost: 'example.com',
-    inputWasEmailAddress: false,
+    fromEmailAddress: false,
     analysedAt: FIXTURE.meta.analysedAt,
     elapsedMs: 1234,
-    modelVersion: result.modelVersion,
-    legitimacy: result.legitimacy,
-    risk: result.risk,
-    confidence: result.confidence,
-    verdict: result.verdict,
-    verdictLabel: VERDICT_LABELS[result.verdict],
-    verdictDescription: VERDICT_DESCRIPTIONS[result.verdict],
-    narrative: result.narrative,
-    flags: result.flags,
-    firstSeen: result.firstSeen,
-    ageDays: result.ageDays,
-    dimensions: result.dimensions,
-    signals: result.signals,
-    inapplicableSignals: result.inapplicableSignals,
-    observations: result.observations,
-    combinations: result.combinations,
-    sources: FIXTURE.sources,
-  };
+    facts: FIXTURE,
+    score: score(FIXTURE),
+  });
 }
 
-const OUT_OF_SCOPE: OutOfScopeResponse = {
+const OUT_OF_SCOPE: OutOfScopeResponse = toOutOfScopeResponse({
+  kind: 'out_of_scope',
   domain: 'gmail.com',
-  outOfScope: {
-    reason: 'shared_free_provider',
-    explanation:
-      'This is a major consumer mail provider. Domain-level analysis says nothing about an individual account.',
-  },
-  verdict: 'out_of_scope',
-  verdictLabel: VERDICT_LABELS.out_of_scope,
-  verdictDescription: VERDICT_DESCRIPTIONS.out_of_scope,
-  modelVersion: '1.5.0',
-};
+  reason: 'shared_free_provider',
+  explanation:
+    'This is a major consumer mail provider. Domain-level analysis says nothing about an individual account.',
+});
 
 const SERVICE_ERROR: ErrorResponse = {
   error: 'analysis_failed',

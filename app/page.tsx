@@ -16,8 +16,9 @@ import {
   type OutOfScopeResponse,
 } from '@/lib/api-types';
 import { readHost } from '@/lib/domain-syntax';
+import { formatAge, formatDate } from '@/lib/format';
 import type { SourceStatus } from '@/lib/facts';
-import { createLineParser } from '@/lib/ndjson';
+import { readNdjsonStream } from '@/lib/ndjson';
 
 /**
  * Examples chosen to span the model rather than to flatter it: an established business, a disposable
@@ -49,25 +50,6 @@ const FAILURE_TONE = {
   },
 } as const;
 
-function formatAge(days: number): string {
-  if (days < 60) return `${days} day${days === 1 ? '' : 's'}`;
-  if (days < 730) {
-    const months = Math.round(days / 30.44);
-    return `${months} month${months === 1 ? '' : 's'}`;
-  }
-  const years = Math.round((days / 365.25) * 10) / 10;
-  return `${years} year${years === 1 ? '' : 's'}`;
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(value));
-}
-
 /**
  * Reads the progress form, reporting each source as it lands and returning the terminal event.
  *
@@ -79,27 +61,12 @@ async function readStream(
   body: ReadableStream<Uint8Array>,
   onSource: (status: SourceStatus) => void,
 ): Promise<ApiResult> {
-  const reader = body.getReader();
-  // Decoded here rather than through `TextDecoderStream` so that `stream: true` carries a multi-byte
-  // character split across two chunks, which a per-chunk decode would turn into a replacement character.
-  const decoder = new TextDecoder();
-  const parser = createLineParser<AnalyzeStreamEvent>();
   let terminal: ApiResult | undefined;
 
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      for (const event of parser.push(decoder.decode(value, { stream: true }))) {
-        if (event.type === 'source') onSource(event);
-        else terminal = event;
-      }
-    }
-  } finally {
-    parser.flush();
-    reader.releaseLock();
-  }
+  await readNdjsonStream<AnalyzeStreamEvent>(body, (event) => {
+    if (event.type === 'source') onSource(event);
+    else terminal = event;
+  });
 
   return (
     terminal ?? {

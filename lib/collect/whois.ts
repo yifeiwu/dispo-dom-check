@@ -1,8 +1,9 @@
 import { createConnection } from 'node:net';
-import { BUDGET, RateLimitedError, TimeoutError, UnsupportedError } from '../collector';
+import { BUDGET } from '../budget';
+import { RateLimitedError, TimeoutError, UnsupportedError } from '../errors';
 import { capture } from '../record';
 import { findWhoisServer } from '../data/whois-servers';
-import { derivePeriods, isPrivacyService } from './registration';
+import { buildRegistrationFacts } from './registration';
 import type { RegistrationFacts } from '../facts';
 
 /**
@@ -347,29 +348,23 @@ export function parseWhois(body: string, now: number = Date.now()): WhoisParse {
     .map((value) => value.trim().split(/\s+/)[0]?.toLowerCase().replace(/\s+/g, ''))
     .filter((value): value is string => Boolean(value));
 
-  const nameservers = [
-    ...new Set(
-      allOf(fields, NAMESERVER_KEYS)
-        .map((value) => value.trim().split(/\s+/)[0]?.toLowerCase().replace(/\.$/, ''))
-        .filter((value): value is string => Boolean(value)),
-    ),
-  ];
-
   return {
     kind: 'record',
-    facts: {
-      via: 'whois',
-      creation,
-      expiry,
-      lastChanged,
-      statuses,
-      registrar: firstOf(fields, REGISTRAR_KEYS),
-      registrarIanaId: fields.first.get('registrar iana id'),
-      registrantOrg,
-      registrantIsPrivacyService: isPrivacyService(registrantOrg),
-      nameservers,
-      ...derivePeriods(creation, expiry, now),
-    },
+    facts: buildRegistrationFacts(
+      {
+        via: 'whois',
+        creation,
+        expiry,
+        lastChanged,
+        statuses,
+        registrar: firstOf(fields, REGISTRAR_KEYS),
+        registrarIanaId: fields.first.get('registrar iana id'),
+        registrantOrg,
+        // Registries pad the nameserver line with the glue address, so only the first token is a name.
+        nameservers: allOf(fields, NAMESERVER_KEYS).map((value) => value.trim().split(/\s+/)[0]),
+      },
+      now,
+    ),
   };
 }
 

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { HttpError, RateLimitedError, TimeoutError, UnsupportedError } from './collector';
+import { HttpError, RateLimitedError, TimeoutError, UnsupportedError } from './errors';
 
 /**
  * Records the raw upstream responses an analysis reads, and replays them back into it.
@@ -32,7 +32,7 @@ export type RecordedError = {
 };
 
 export type Exchange = {
-  call: 'fetchText' | 'probe' | 'exists' | 'whois';
+  call: 'fetchText' | 'probe' | 'whois';
   /** For `whois`, a `whois://server/term` pseudo-URL, since the protocol has no URL of its own. */
   url: string;
   accept?: string;
@@ -61,12 +61,6 @@ type Descriptor = Pick<Exchange, 'call' | 'url' | 'accept' | 'redirect' | 'metho
 type Codec<T> = {
   encode: (value: T) => Partial<Exchange>;
   decode: (exchange: Exchange) => T;
-  /**
-   * What a caller that cannot fail should receive when the transcript has no answer. Without this a
-   * missing record would throw out of a call whose whole contract is that it never does, turning one
-   * unrecorded request into a whole source reported as broken.
-   */
-  onMiss?: () => T;
 };
 
 type Context =
@@ -171,7 +165,6 @@ export async function capture<T>(descriptor: Descriptor, codec: Codec<T>, run: (
     const recorded = context.byKey.get(key);
     if (!recorded || recorded.length === 0) {
       context.misses.push(key);
-      if (codec.onMiss) return codec.onMiss();
       throw new TranscriptMissError(descriptor.url);
     }
     // Repeated identical requests replay in order, then hold on the last response. A GET the new code

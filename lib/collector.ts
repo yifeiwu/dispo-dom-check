@@ -14,6 +14,9 @@
  * band. See `docs/SCORING.md`.
  */
 
+import { BUDGET } from './budget';
+import { HttpError, RateLimitedError, TimeoutError, UnsupportedError } from './errors';
+
 export type CollectorStatus =
   | 'ok'
   | 'timeout'
@@ -46,82 +49,6 @@ export type CollectorResult<T> = {
   elapsedMs: number;
   sourceUrl?: string;
 };
-
-export const BUDGET = {
-  /** Per-source deadline. A source exceeding this is reported as `timeout`. */
-  perSourceMs: 4_000,
-  /**
-   * The site collector alone probes twice in sequence, falling back to http when https fails, so one
-   * per-source deadline cannot cover both legs. Held apart from `perSourceMs` so that widening the
-   * chain does not silently widen every other source too.
-   */
-  siteMs: 5_000,
-  /**
-   * The port-43 fallback, which is given less than a normal source rather than more.
-   *
-   * It is the slowest transport in the system and the only one with no framing, so a stalled registry is
-   * indistinguishable from a slow one until the deadline fires, and a suffix whose registry is down
-   * should not cost the whole analysis its remaining budget. It runs only where RDAP produced no answer,
-   * so it is never on the path of a domain that already has a registration record, and it shares its
-   * wave with the site probe: kept under `siteMs`, it adds no wall-clock time to an analysis.
-   */
-  whoisMs: 3_000,
-  /**
-   * The metered reputation source, held below a normal source deadline.
-   *
-   * It is a commercial API on a monthly request budget rather than a protocol this model depends on,
-   * so it is the source most worth abandoning early: nothing downstream needs it, and it shares its
-   * wave with the longer site probe, so the whole of it is free wall-clock time.
-   */
-  checkmailMs: 2_500,
-  /** The last wave, which reads what the others already fetched and so needs very little. */
-  signupMs: 1_500,
-  /**
-   * Whole-analysis deadline. Anything still pending is reported as `timeout`.
-   *
-   * Sized above the worst-case sequence rather than to it. The waves run `perSourceMs`, then `siteMs`,
-   * then `signupMs`, so a request that times out at every step still finishes well inside this. The
-   * remainder is deliberate slack: `remaining()` shrinks every per-source deadline once the global one
-   * starts to bind, so a budget sized exactly to the sequence would quietly shorten the individual
-   * sources on any request the platform happened to schedule slowly.
-   */
-  globalMs: 15_000,
-  /** Cap on a single response body we are willing to read. */
-  maxBodyBytes: 256 * 1024,
-  /**
-   * Redirect hops we will follow. Enforced in `fetch.ts`, which follows chains itself rather than
-   * delegating to the runtime's own limit of twenty.
-   */
-  maxRedirects: 5,
-} as const;
-
-/** Community APIs are being used for free, so identify the client honestly. */
-export const USER_AGENT = 'domain-legitimacy-scorer/1.0 (signup-risk analysis; contact via repository)';
-
-export class TimeoutError extends Error {
-  constructor(ms: number) {
-    super(`exceeded ${ms}ms deadline`);
-    this.name = 'TimeoutError';
-  }
-}
-
-export class RateLimitedError extends Error {
-  constructor(
-    message: string,
-    readonly retryAfterMs?: number,
-  ) {
-    super(message);
-    this.name = 'RateLimitedError';
-  }
-}
-
-/** A source that does not apply to this domain at all, e.g. a TLD with no RDAP service. */
-export class UnsupportedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'UnsupportedError';
-  }
-}
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -178,16 +105,6 @@ export async function runCollector<T>(
       status: 'unavailable',
       reason: error instanceof Error ? error.message : 'Unknown failure',
     };
-  }
-}
-
-export class HttpError extends Error {
-  constructor(
-    readonly statusCode: number,
-    url: string,
-  ) {
-    super(`HTTP ${statusCode} from ${new URL(url).host}`);
-    this.name = 'HttpError';
   }
 }
 

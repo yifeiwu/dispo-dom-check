@@ -1,7 +1,7 @@
 import { fetchJson } from '../fetch';
 import { withBackgroundRefresh } from '../reference-cache';
-import { UnsupportedError } from '../collector';
-import { derivePeriods, isPrivacyService } from './registration';
+import { UnsupportedError } from '../errors';
+import { buildRegistrationFacts } from './registration';
 import type { RegistrationFacts } from '../facts';
 
 /**
@@ -34,7 +34,7 @@ async function loadBootstrap(timeoutMs: number): Promise<Bootstrap> {
 }
 
 /** Finds the RDAP base URL for a suffix, preferring the longest matching suffix entry. */
-export function findRdapBase(bootstrap: Bootstrap, suffix: string): string | null {
+function findRdapBase(bootstrap: Bootstrap, suffix: string): string | null {
   const labels = suffix.toLowerCase().split('.');
   let best: { length: number; url: string } | null = null;
 
@@ -143,20 +143,18 @@ export async function collectRdap(
 
   return {
     sourceUrl,
-    facts: {
+    facts: buildRegistrationFacts({
       via: 'rdap',
       creation,
       expiry,
       lastChanged,
+      // RDAP spells EPP codes with spaces, so the whitespace comes out rather than being cut at the
+      // first token the way a port-43 status line has to be.
       statuses: (response.status ?? []).map((s) => s.toLowerCase().replace(/\s+/g, '')),
       registrar: registrarEntity ? vcardField(registrarEntity, 'fn') : undefined,
       registrarIanaId: registrarEntity?.publicIds?.find((id) => id.type?.includes('IANA'))?.identifier,
       registrantOrg,
-      registrantIsPrivacyService: isPrivacyService(registrantOrg),
-      nameservers: (response.nameservers ?? [])
-        .map((ns) => ns.ldhName?.toLowerCase().replace(/\.$/, ''))
-        .filter((value): value is string => Boolean(value)),
-      ...derivePeriods(creation, expiry),
-    },
+      nameservers: (response.nameservers ?? []).map((ns) => ns.ldhName),
+    }),
   };
 }

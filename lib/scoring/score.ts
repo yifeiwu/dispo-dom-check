@@ -30,6 +30,16 @@ export type ReasonFlag =
   | 'registrar_default'
   | 'registry_hold';
 
+/**
+ * A signal that did not apply, which renders differently from one that applied and scored zero. It
+ * carries the definition's fixed text and no evidence, because there was nothing to observe.
+ */
+export type InapplicableSignal = {
+  id: string;
+  label: string;
+  rationale: string;
+};
+
 export type DimensionSubtotal = {
   dimension: Dimension;
   raw: number;
@@ -49,8 +59,7 @@ export type ScoreResult = {
   narrative: string;
   dimensions: DimensionSubtotal[];
   signals: SignalResult[];
-  /** Signals that did not apply, which renders differently from a signal scoring zero. */
-  inapplicableSignals: { id: string; label: string; rationale: string }[];
+  inapplicableSignals: InapplicableSignal[];
   /** Facts collected and reported beside the verdict that move no score by construction. */
   observations: ObservationResult[];
   combinations: CombinationResult[];
@@ -71,7 +80,7 @@ export function score(
 ): ScoreResult {
   // 1. Signals.
   const signals: SignalResult[] = [];
-  const inapplicable: { id: string; label: string; rationale: string }[] = [];
+  const inapplicable: InapplicableSignal[] = [];
 
   for (const definition of SIGNALS) {
     const outcome = exclude?.has(definition.id) ? null : definition.evaluate(facts, cfg);

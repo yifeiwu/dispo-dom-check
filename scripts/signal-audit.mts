@@ -28,17 +28,14 @@
  *
  * Usage: npm run audit -- --collect --concurrency 8
  */
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { normaliseInput } from '../lib/domain';
-import { analyze } from '../lib/analyze';
-import type { DomainFacts } from '../lib/facts';
-import { sharedTranscript, withHttpRecording, withHttpReplay } from '../lib/record';
+import { CACHE_DIR } from './raw-store.mts';
 import { score } from '../lib/scoring/score';
 import { SIGNALS } from '../lib/scoring/signals';
 import { COMBINATIONS } from '../lib/scoring/combinations';
 import { DEFAULT_CONFIG, type ScoringConfig } from '../lib/scoring/weights';
-import { arg, pool, flag } from './cli.mts';
+import { arg, flag } from './cli.mts';
 import {
   BENCHMARK_DIR,
   describeGroups,
@@ -47,23 +44,20 @@ import {
   isGraded,
   isLegitimate,
   loadBenchmark,
-  orderedLabels,
-  type Group,
-  type Row,
 } from './benchmark.mts';
+import { reportBands, scoreAll, type Scored } from './audit/bands.mts';
+import { loadCache } from './audit/cache.mts';
+import { collect, reparse } from './audit/collect.mts';
+import { buildFamilies } from './audit/families.mts';
+import { KNOBS } from './audit/knobs.mts';
 import {
-  CACHE_DIR,
-  RAW_DIR,
-  describeAge,
-  hasRaw,
-  mergeSharedRaw,
-  readRaw,
-  readSharedRaw,
-  safeName,
-  writeRaw,
-} from './raw-store.mts';
-
-type Cached = { domain: string; label: string; group: Group; facts: DomainFacts };
+  createAucEstimator,
+  mulberry32,
+  pct,
+  percentile,
+  signed,
+  wilson,
+} from './audit/stats.mts';
 
 const benchmarkDir = arg('benchmark', BENCHMARK_DIR);
 const groups = arg('group', '');
@@ -77,299 +71,6 @@ const bootstrapDraws = Number(arg('bootstrap', '400'));
  */
 const familyGate = Number(arg('gate', '10'));
 
-/**
- * One operator's generated names collapse to a single key: `mail01.example` through `mail99.example`
- * are one family. The abuse half is full of them and they are not independent observations, so every
- * figure below weights a family to a total of one and every interval resamples families.
- */
-function familyKey(domain: string): string {
-  const parts = domain.split('.');
-  const label = parts[0];
-  const suffix = parts.slice(1).join('.');
-  const stripped = label.replace(/\d+/g, '#');
-  return `${stripped}|${suffix}`;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Phase one: collection, cached per domain so a re-run costs nothing
-// ---------------------------------------------------------------------------------------------
-
-const cachePathFor = (domain: string) => join(CACHE_DIR, `${safeName(domain)}.json`);
-
-const writeFacts = (row: Row, facts: DomainFacts) =>
-  writeFileSync(cachePathFor(row.domain), JSON.stringify({ domain: row.domain, label: row.label, facts }));
-
-/**
- * A domain is only considered collected once both halves are on disk. The facts alone were enough while
- * they were all that was stored, but a domain with facts and no transcript is exactly the one that would
- * force a refetch later.
- *
- * A run is therefore resumable, and that is also how a starved source is recovered: delete the cache
- * entries whose stored facts show the source timing out, and re-run `--collect` at a lower concurrency.
- */
-const isCollected = (domain: string) => existsSync(cachePathFor(domain)) && hasRaw(domain);
-
-async function collect(rows: Row[]): Promise<void> {
-  mkdirSync(CACHE_DIR, { recursive: true });
-  const pending = rows.filter((row) => !isCollected(row.domain));
-  console.log(`${rows.length} rows, ${rows.length - pending.length} already cached, ${pending.length} to probe`);
-
-  let empty = 0;
-  /**
-   * Throttling has to be caught while it is happening, not inferred afterwards from a thin column.
-   *
-   * A large abuse collection concentrates on a handful of suffixes and therefore on a handful of registry
-   * servers. The registration record carries the heaviest confidence weight and the model's strongest
-   * signal, so a throttled run does not merely go slowly: it produces a cache in which age is missing for
-   * reasons that have nothing to do with the domains, and every measurement taken from it is wrong.
-   *
-   * Both registration protocols are watched, and port 43 is the likelier of the two to trip. Its limits
-   * are tighter than RDAP's, they are enforced per source address, and a run concentrated on one ccTLD is
-   * hitting a single registry from a single address for its whole duration.
-   */
-  const throttled = new Map<string, number>();
-  const answered = new Map<string, number>();
-  const warned = new Set<string>();
-
-  const { failures } = await pool(
-    pending,
-    concurrency,
-    async (row) => {
-      const input = normaliseInput(row.domain);
-      if (input.kind !== 'ok') {
-        writeFileSync(
-          cachePathFor(row.domain),
-          JSON.stringify({ domain: row.domain, label: row.label, skipped: input.kind }),
-        );
-        // A transcript of nothing, so the domain counts as collected rather than being re-probed forever.
-        writeRaw(row.domain, { recordedAt: new Date().toISOString(), exchanges: [] });
-        return;
-      }
-      const { value, transcript } = await withHttpRecording(() => analyze(input));
-      if (transcript.exchanges.length === 0) empty += 1;
-      writeRaw(row.domain, transcript);
-      writeFacts(row, value.facts);
-
-      for (const source of value.facts.sources) {
-        answered.set(source.source, (answered.get(source.source) ?? 0) + 1);
-        if (source.status === 'rate_limited') {
-          throttled.set(source.source, (throttled.get(source.source) ?? 0) + 1);
-        }
-      }
-      for (const source of ['rdap', 'whois']) {
-        const seen = answered.get(source) ?? 0;
-        const limited = throttled.get(source) ?? 0;
-        if (warned.has(source) || seen < 200 || limited / seen <= 0.02) continue;
-        warned.add(source);
-        process.stderr.write(
-          `\n  ${source.toUpperCase()} is rate limiting: ${limited} of ${seen} so far. Consider stopping ` +
-            `and re-running with a lower --concurrency; the run is resumable and will skip what is stored.\n`,
-        );
-      }
-    },
-    'probed',
-  );
-
-  mergeSharedRaw(sharedTranscript());
-  console.log(`Collection complete`);
-  if (failures.length > 0) {
-    console.log(`${failures.length} domains threw and were not stored: ${failures[0]}`);
-  }
-
-  for (const [source, count] of [...throttled].sort((a, b) => b[1] - a[1])) {
-    const seen = answered.get(source) ?? 0;
-    console.log(`  ${source} was rate limited on ${count} of ${seen} domains (${pct(count / seen)})`);
-  }
-
-  /**
-   * Every analysable domain queries DNS at minimum, so an empty transcript means the recorder saw
-   * nothing rather than that there was nothing to see. Worth failing on: the run would otherwise look
-   * successful and leave a cache that cannot be re-parsed.
-   */
-  if (empty > 0) {
-    console.error(`\n${empty} domains recorded no responses at all. The recorder is not observing the`);
-    console.error(`collectors, so this cache cannot be re-parsed. Fix before trusting the run.`);
-    process.exit(1);
-  }
-}
-
-// ---------------------------------------------------------------------------------------------
-// Phase two: re-parse, which is why the responses are kept
-// ---------------------------------------------------------------------------------------------
-
-/**
- * Rebuilds the facts by running the current collectors against the stored responses. This is the answer
- * to a parser change: no network, and every domain sees exactly what it saw during collection.
- *
- * Two things a replayed run cannot recover, both reported rather than hidden. A request the new code
- * makes that the recording never saw has no answer and is counted as a miss. And anything measured
- * against the clock, registration age above all, is computed from today rather than from the day the
- * response was captured, so an old transcript ages its domains along with it.
- */
-async function reparse(rows: Row[]): Promise<void> {
-  const shared = readSharedRaw();
-  const available = rows.filter((row) => hasRaw(row.domain));
-  const oldest = available
-    .map((row) => readRaw(row.domain)?.recordedAt)
-    .filter((value): value is string => Boolean(value))
-    .sort()[0];
-
-  console.log(
-    `${available.length} of ${rows.length} domains have stored responses` +
-      (oldest ? `, oldest ${describeAge({ recordedAt: oldest, exchanges: [] })}` : ''),
-  );
-  if (available.length === 0) {
-    console.log('Nothing to re-parse. Run with --collect first.');
-    return;
-  }
-
-  let missed = 0;
-  const missedDomains: string[] = [];
-
-  await pool(
-    available,
-    concurrency,
-    async (row) => {
-      const input = normaliseInput(row.domain);
-      if (input.kind !== 'ok') return;
-      const transcript = readRaw(row.domain);
-      const { value, misses } = await withHttpReplay([transcript, shared], () => analyze(input));
-      if (misses.length > 0) {
-        missed += misses.length;
-        if (missedDomains.length < 5) missedDomains.push(row.domain);
-      }
-      writeFacts(row, value.facts);
-    },
-    're-parsed',
-  );
-
-  console.log(`Re-parse complete`);
-  if (missed > 0) {
-    console.log(
-      `${missed} requests had no recorded response (e.g. ${missedDomains.join(', ')}). Usually these were ` +
-        `still in flight when a collector's deadline abandoned them, so nothing came back to record; a ` +
-        `replayed run answers instantly and reaches them. If instead the collectors have learned to ` +
-        `request something new, delete those transcripts from ${RAW_DIR} and re-run --collect.`,
-    );
-  }
-}
-
-/**
- * Facts are cached per domain and outlive any one benchmark, so the label is taken from the files being
- * audited rather than from the cache entry. Two datasets can disagree about a domain, and the run must
- * reflect the one it was pointed at.
- */
-function loadCache(rows: Row[]): Cached[] {
-  mkdirSync(CACHE_DIR, { recursive: true });
-  const wanted = new Map(rows.map((row) => [row.domain, row]));
-  const entries: Cached[] = [];
-  for (const file of readdirSync(CACHE_DIR)) {
-    if (!file.endsWith('.json')) continue;
-    const parsed = JSON.parse(readFileSync(join(CACHE_DIR, file), 'utf8'));
-    const row = wanted.get(parsed.domain);
-    if (!parsed.facts || row === undefined) continue;
-    entries.push({ ...row, facts: parsed.facts });
-  }
-  return entries;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Metrics
-// ---------------------------------------------------------------------------------------------
-
-const pct = (value: number) => `${Math.round(value * 100)}%`;
-const signed = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
-
-/**
- * Wilson score interval, which is the right binomial interval at the counts this report deals in.
- *
- * The normal approximation collapses when a signal fires a handful of times or fires unanimously, and
- * those are precisely the cases the tiering has to rule on. Wilson stays inside [0,1] and does not
- * degenerate to a zero-width interval at p=0 or p=1, so "fired on 9 domains, all abuse" comes out as the
- * weak evidence it is rather than as certainty.
- */
-function wilson(successes: number, trials: number, z = 1.96): [number, number] {
-  if (trials === 0) return [0, 1];
-  const p = successes / trials;
-  const denominator = 1 + (z * z) / trials;
-  const centre = p + (z * z) / (2 * trials);
-  const spread = z * Math.sqrt((p * (1 - p)) / trials + (z * z) / (4 * trials * trials));
-  return [Math.max(0, (centre - spread) / denominator), Math.min(1, (centre + spread) / denominator)];
-}
-
-/**
- * Score histograms, exploiting the fact that `legitimacy` is a rounded integer in [0,100].
- *
- * Every measurement below is some AUC over a resampled cohort, thousands of times over, and the
- * rank-based form is O(n log n) with an allocation per call. Bucketing by score makes each AUC a linear
- * pass and a 101-bin sweep, which is what makes a cluster bootstrap over every signal affordable.
- */
-const SCORE_BINS = 101;
-const abuseHistogram = new Float64Array(SCORE_BINS);
-const legitHistogram = new Float64Array(SCORE_BINS);
-
-function aucFromHistograms(abuseMass: number, legitMass: number): number {
-  if (abuseMass <= 0 || legitMass <= 0) return NaN;
-  // P(a legitimate domain scores above an abuse one) plus half the ties, which is the quantity averaged
-  // ranks compute when ranking by risk. Ties are heavy here, since the scores are coarse integers.
-  let above = legitMass;
-  let total = 0;
-  for (let score = 0; score < SCORE_BINS; score += 1) {
-    above -= legitHistogram[score];
-    total += abuseHistogram[score] * (above + 0.5 * legitHistogram[score]);
-  }
-  return total / (abuseMass * legitMass);
-}
-
-/**
- * Weighting each family to a total of one keeps every domain in the run while giving a family of 400 no
- * more say than a family of 1. Resampling *families* rather than domains then gives an interval that
- * reflects how few independent operators some signals have actually been seen by.
- */
-type Family = { members: number[]; abuse: boolean; legit: boolean };
-
-function buildFamilies(entries: Cached[]): { families: Family[]; familyOf: Int32Array; weights: Float64Array } {
-  const index = new Map<string, number>();
-  const families: Family[] = [];
-  const familyOf = new Int32Array(entries.length);
-
-  entries.forEach((entry, position) => {
-    const bucket = isAbuse(entry) ? 'a' : isLegitimate(entry) ? 'l' : 'p';
-    const key = `${bucket}|${familyKey(entry.domain)}`;
-    let at = index.get(key);
-    if (at === undefined) {
-      at = families.length;
-      index.set(key, at);
-      families.push({ members: [], abuse: isAbuse(entry), legit: isLegitimate(entry) });
-    }
-    families[at].members.push(position);
-    familyOf[position] = at;
-  });
-
-  const weights = new Float64Array(entries.length);
-  for (const family of families) {
-    for (const member of family.members) weights[member] = 1 / family.members.length;
-  }
-  return { families, familyOf, weights };
-}
-
-/** Deterministic generator, so a re-run compares against the same resamples as the run before. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function percentile(sorted: number[], fraction: number): number {
-  if (sorted.length === 0) return NaN;
-  const at = Math.min(sorted.length - 1, Math.max(0, Math.round(fraction * (sorted.length - 1))));
-  return sorted[at];
-}
-
 // ---------------------------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------------------------
@@ -378,8 +79,8 @@ const loaded = loadBenchmark(benchmarkDir);
 const rows = groups ? filterGroups(loaded, groups) : loaded;
 if (groups) console.log(`Restricted to ${groups}: ${describeGroups(rows)}`);
 
-if (flag('collect')) await collect(rows);
-if (flag('reparse')) await reparse(rows);
+if (flag('collect')) await collect(rows, concurrency);
+if (flag('reparse')) await reparse(rows, concurrency);
 
 const cached = loadCache(rows);
 if (cached.length === 0) {
@@ -388,254 +89,12 @@ if (cached.length === 0) {
 }
 
 /**
- * Positive class is abuse, negative is legitimate. Privacy sits out of the headline metric on purpose:
- * the model deliberately flags forwarders without condemning them, so scoring them as either class would
- * measure a policy choice rather than an error. Their firing rates are still printed, one column over.
- */
-type Scored = {
-  entry: Cached;
-  legitimacy: number;
-  confidence: number;
-  verdict: string;
-  flags: string[];
-  abuse: boolean;
-  legit: boolean;
-};
-
-function scoreAll(exclude?: ReadonlySet<string>): Scored[] {
-  return cached.map((entry) => {
-    const result = score(entry.facts, DEFAULT_CONFIG, exclude);
-    return {
-      entry,
-      legitimacy: result.legitimacy,
-      confidence: result.confidence,
-      verdict: result.verdict,
-      flags: result.flags,
-      abuse: isAbuse(entry),
-      legit: isLegitimate(entry),
-    };
-  });
-}
-
-function distribution(values: number[]): { n: number; median: number; mean: number; p10: number; p90: number } {
-  const sorted = [...values].sort((a, b) => a - b);
-  const at = (fraction: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))];
-  return {
-    n: sorted.length,
-    median: sorted.length ? at(0.5) : NaN,
-    mean: sorted.length ? Math.round((sorted.reduce((a, b) => a + b, 0) / sorted.length) * 10) / 10 : NaN,
-    p10: sorted.length ? at(0.1) : NaN,
-    p90: sorted.length ? at(0.9) : NaN,
-  };
-}
-
-/**
- * The three heaviest signals behind one verdict, recomputed for the handful of domains actually listed
- * rather than carried on every row. `scoreAll` runs once per ablation over the whole holdout, so a
- * per-row array of drivers would be allocated some tens of thousands of times to be read a dozen.
- */
-function topDrivers(entry: Cached): string {
-  return [...score(entry.facts, DEFAULT_CONFIG).signals]
-    .filter((signal) => signal.points !== 0)
-    .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
-    .slice(0, 3)
-    .map((signal) => `${signal.id}(${signal.points})`)
-    .join(' ');
-}
-
-/**
- * Does the model separate the labels, and are the band boundaries in the right place?
- *
- * Distinct from everything below it, which asks whether each individual heuristic earns its place. Both
- * read the same cached facts, so a figure here and a figure there describe one set of observations.
- */
-function reportBands(scored: Scored[]): void {
-  const labels = orderedLabels(cached);
-  /** Marks the group that is reported but never graded, so no reader mistakes a row for an error rate. */
-  const note = (group: Group) => (group === 'privacy' ? '  (not graded)' : '');
-  const inLabel = (label: string) => scored.filter((row) => row.entry.label === label);
-
-  console.log('\n=== Score distribution by label (legitimacy, higher is more legitimate) ===');
-  for (const { label, group } of labels) {
-    const rows = inLabel(label);
-    const legitimacy = distribution(rows.map((row) => row.legitimacy));
-    const confidence = distribution(rows.map((row) => row.confidence));
-    console.log(
-      `${label.padEnd(14)} n=${String(legitimacy.n).padStart(4)}  median=${String(legitimacy.median).padStart(3)}  ` +
-        `mean=${String(legitimacy.mean).padStart(5)}  p10=${String(legitimacy.p10).padStart(3)}  ` +
-        `p90=${String(legitimacy.p90).padStart(3)}  confidence median=${confidence.median}${note(group)}`,
-    );
-  }
-
-  console.log('\n=== Verdict distribution by label ===');
-  for (const { label, group } of labels) {
-    const tally = new Map<string, number>();
-    for (const row of inLabel(label)) tally.set(row.verdict, (tally.get(row.verdict) ?? 0) + 1);
-    const rendered = [...tally]
-      .sort((a, b) => b[1] - a[1])
-      .map(([verdict, count]) => `${verdict}=${count}`)
-      .join(' ');
-    console.log(`${label.padEnd(14)} ${rendered}${note(group)}`);
-  }
-
-  console.log('\n=== Flag hit rate by label ===');
-  for (const { label, group } of labels) {
-    const rows = inLabel(label);
-    const tally = new Map<string, number>();
-    for (const row of rows) for (const name of row.flags) tally.set(name, (tally.get(name) ?? 0) + 1);
-    const rendered = [...tally]
-      .sort((a, b) => b[1] - a[1])
-      .map(([name, count]) => `${name}=${Math.round((count / rows.length) * 100)}%`)
-      .join(' ');
-    console.log(`${label.padEnd(14)} ${rendered || 'none'}${note(group)}`);
-  }
-
-  const abuse = scored.filter((row) => row.abuse);
-  const legit = scored.filter((row) => row.legit);
-  const ungraded = scored.filter((row) => !isGraded(row.entry));
-
-  const riskBand = (row: Scored) => row.verdict === 'high_risk' || row.verdict === 'suspicious';
-  const legitimateBand = (row: Scored) =>
-    row.verdict === 'probably_legitimate' || row.verdict === 'established';
-  const share = (part: Scored[], whole: Scored[]) =>
-    whole.length === 0 ? '-' : `${Math.round((part.length / whole.length) * 100)}%`;
-
-  /*
-   * The failures worth acting on. A legitimate domain scored as risky is the expensive error, because it
-   * blocks a real user, so those are listed with their drivers to show which weight caused it.
-   */
-  console.log('\n=== False positives: legitimate domains landing in a risk band ===');
-  const falsePositives = legit.filter(riskBand);
-  console.log(
-    falsePositives.length === 0
-      ? 'none'
-      : `${falsePositives.length} of ${legit.length} (${share(falsePositives, legit)})`,
-  );
-  for (const row of falsePositives) {
-    console.log(`  ${row.legitimacy}  ${row.verdict.padEnd(12)} ${topDrivers(row.entry)}`);
-  }
-
-  console.log('\n=== False negatives: abuse domains landing in a legitimate band ===');
-  const falseNegatives = abuse.filter(legitimateBand);
-  console.log(
-    falseNegatives.length === 0
-      ? 'none'
-      : `${falseNegatives.length} of ${abuse.length} (${share(falseNegatives, abuse)})`,
-  );
-  for (const row of falseNegatives.slice(0, 15)) {
-    console.log(`  ${row.legitimacy}  ${row.verdict.padEnd(20)} ${topDrivers(row.entry)}`);
-  }
-
-  /*
-   * Where the ungraded group actually lands. It is spread across the bands rather than concentrated in
-   * one, which is the expected shape: a forwarder is flagged for its capability, and the rest of its
-   * configuration then decides the verdict like any other domain.
-   */
-  if (ungraded.length > 0) {
-    console.log('\n=== Privacy and forwarder domains: reported, never graded ===');
-    console.log(
-      `${ungraded.length} scored: ${share(ungraded.filter(riskBand), ungraded)} in a risk band, ` +
-        `${share(ungraded.filter(legitimateBand), ungraded)} in a legitimate band. Neither counts as an ` +
-        `error, because the model flags this capability without ruling on it.`,
-    );
-  }
-
-  if (abuse.length === 0 || legit.length === 0) return;
-
-  const abuseScores = abuse.map((row) => row.legitimacy);
-  const legitScores = legit.map((row) => row.legitimacy);
-  console.log(
-    `\nSeparation between medians: ${distribution(legitScores).median - distribution(abuseScores).median} points`,
-  );
-
-  /*
-   * Where the two graded distributions cross, which is the measurement the band boundaries are supposed
-   * to sit on. Printed next to the configured floor so a drift between the two is visible rather than
-   * inferred: bands chosen for roundness are exactly the failure this is here to catch.
-   */
-  const legitimateFloor =
-    (DEFAULT_CONFIG.verdictBands.find((band) => band.verdict === 'unclear')?.maxScore ?? 0) + 1;
-
-  console.log('\n=== Band boundary check: where do abuse and legitimate cross? ===');
-  console.log('threshold  abuse below (recall)  legitimate at or above (specificity)  Youden J');
-  let best = { threshold: 0, j: -Infinity };
-  for (let threshold = 30; threshold <= 90; threshold += 1) {
-    const recall = abuseScores.filter((value) => value < threshold).length / abuseScores.length;
-    const specificity = legitScores.filter((value) => value >= threshold).length / legitScores.length;
-    const j = recall + specificity - 1;
-    if (j > best.j) best = { threshold, j };
-    if (threshold % 4 === 0 || threshold === legitimateFloor) {
-      console.log(
-        `${String(threshold).padStart(9)}  ${`${Math.round(recall * 1000) / 10}%`.padStart(20)}  ` +
-          `${`${Math.round(specificity * 1000) / 10}%`.padStart(36)}  ${j.toFixed(3)}` +
-          `${threshold === legitimateFloor ? '   <- configured floor' : ''}`,
-      );
-    }
-  }
-  console.log(`\nBest separating threshold by Youden J: ${best.threshold} (J=${best.j.toFixed(3)})`);
-  console.log(`Configured probably_legitimate floor: ${legitimateFloor}`);
-
-  /*
-   * The other three edges, which went unmeasured while only the crossover was swept.
-   *
-   * Reported as the share of each class that lands in the band, and deliberately not as the composition
-   * of the band. Composition is the more natural question and the answer would be worthless here: this
-   * holdout runs about twenty abuse domains to every legitimate one because it was assembled to exercise
-   * the abuse half, so every band reads as mostly abuse and the number describes the sampling rather than
-   * the boundary. Per-class rates do not move when the mix does.
-   *
-   * What each edge should be judged on is the claim its name makes. Almost no legitimate domain should
-   * reach `high_risk`, and `established` should be hard for an abuse domain to reach.
-   */
-  console.log('\n=== The other band edges: what share of each class lands in each band? ===');
-  console.log('band                     range   of abuse   of legitimate');
-  const edges = DEFAULT_CONFIG.verdictBands;
-  let lower = 0;
-  for (const band of edges) {
-    const inBand = (value: number) => value >= lower && value <= band.maxScore;
-    const abuseIn = abuseScores.filter(inBand).length / abuseScores.length;
-    const legitIn = legitScores.filter(inBand).length / legitScores.length;
-    console.log(
-      `${band.verdict.padEnd(22)} ${`${lower}-${band.maxScore}`.padStart(7)} ` +
-        `${`${(abuseIn * 100).toFixed(1)}%`.padStart(10)}   ${`${(legitIn * 100).toFixed(1)}%`.padStart(13)}`,
-    );
-    lower = band.maxScore + 1;
-  }
-
-  /*
-   * Where the two extreme edges would sit if placed on the claim rather than inherited. Both targets are
-   * per-class rates for the reason above: a target expressed as a share of the band would move with the
-   * next benchmark refresh even if the model had not changed at all.
-   */
-  const highRiskCeiling = edges.find((band) => band.verdict === 'high_risk')?.maxScore ?? 0;
-  const establishedFloor = (edges.find((band) => band.verdict === 'probably_legitimate')?.maxScore ?? 0) + 1;
-
-  let ceiling = 0;
-  for (let target = 0; target <= 100; target += 1) {
-    if (legitScores.filter((value) => value <= target).length / legitScores.length > 0.02) break;
-    ceiling = target;
-  }
-  console.log(
-    `\nhigh_risk could reach ${ceiling} before 2% of legitimate domains fall inside it (configured ${highRiskCeiling})`,
-  );
-
-  let floor = 100;
-  for (let target = 100; target >= 0; target -= 1) {
-    if (abuseScores.filter((value) => value >= target).length / abuseScores.length > 0.02) break;
-    floor = target;
-  }
-  console.log(
-    `established would need a floor of ${floor} to hold abuse below 2% of its class (configured ${establishedFloor})`,
-  );
-}
-
-/**
  * The distribution and band report, which answers "do the weights separate the labels and are the
  * boundaries in the right place". It exits before the ablation below, because that is the expensive
  * half — several hundred bootstrap resamples per signal — and answers a different question entirely.
  */
 if (flag('bands')) {
-  reportBands(scoreAll());
+  reportBands(cached, scoreAll(cached));
   process.exit(0);
 }
 
@@ -643,26 +102,9 @@ const { families, familyOf, weights } = buildFamilies(cached);
 const abuseFamilies = families.map((family, at) => (family.abuse ? at : -1)).filter((at) => at >= 0);
 const legitFamilies = families.map((family, at) => (family.legit ? at : -1)).filter((at) => at >= 0);
 
-/** Scratch arrays reused across every resample, since this runs some hundreds of thousands of times. */
-function weightedAucOver(scores: Int32Array, abuseDraw: Int32Array, legitDraw: Int32Array): number {
-  abuseHistogram.fill(0);
-  legitHistogram.fill(0);
-  let abuseMass = 0;
-  let legitMass = 0;
-  for (const family of abuseDraw) {
-    for (const member of families[family].members) {
-      abuseHistogram[scores[member]] += weights[member];
-      abuseMass += weights[member];
-    }
-  }
-  for (const family of legitDraw) {
-    for (const member of families[family].members) {
-      legitHistogram[scores[member]] += weights[member];
-      legitMass += weights[member];
-    }
-  }
-  return aucFromHistograms(abuseMass, legitMass);
-}
+/** Holds the scratch histograms reused across every resample, since this runs hundreds of thousands
+ *  of times. */
+const weightedAucOver = createAucEstimator(families, weights);
 
 const allAbuseDraw = Int32Array.from(abuseFamilies);
 const allLegitDraw = Int32Array.from(legitFamilies);
@@ -689,7 +131,7 @@ for (let draw = 0; draw < bootstrapDraws; draw += 1) {
   draws.push({ abuse: abuseDraw, legit: legitDraw });
 }
 
-const baseline = scoreAll();
+const baseline = scoreAll(cached);
 const baselineScores = scoresOf(baseline);
 const baselineAuc = weightedAucOver(baselineScores, allAbuseDraw, allLegitDraw);
 const baselinePerDraw = draws.map((draw) => weightedAucOver(baselineScores, draw.abuse, draw.legit));
@@ -909,7 +351,7 @@ type Ablation = {
 
 const ablations: Ablation[] = [];
 for (const id of [...SIGNALS.map((s) => s.id), ...COMBINATIONS.map((c) => c.id)]) {
-  const without = scoreAll(new Set([id]));
+  const without = scoreAll(cached, new Set([id]));
   const interval = deltaAucCi(scoresOf(without));
   const bands = bandErrors(without);
   ablations.push({
@@ -1156,7 +598,7 @@ console.log(`\n=== Group ablations: whole dimensions ===`);
 const dimensions = [...new Set(SIGNALS.map((definition) => definition.dimension))];
 for (const dimension of dimensions) {
   const ids = new Set(SIGNALS.filter((definition) => definition.dimension === dimension).map((d) => d.id));
-  const interval = deltaAucCi(scoresOf(scoreAll(ids)));
+  const interval = deltaAucCi(scoresOf(scoreAll(cached, ids)));
   console.log(
     `${dimension.padEnd(14)} ΔAUC ${signed(interval.point)} (${signed(interval.lo)}, ${signed(interval.hi)})`,
   );
@@ -1165,7 +607,7 @@ for (const dimension of dimensions) {
 console.log(`\n=== Removing everything the rule marks REMOVE, at once ===`);
 const marked = judged.filter((item) => item.verdict.startsWith('REMOVE'));
 if (marked.length > 0) {
-  const without = scoreAll(new Set(marked.map((item) => item.id)));
+  const without = scoreAll(cached, new Set(marked.map((item) => item.id)));
   const interval = deltaAucCi(scoresOf(without));
   const bands = bandErrors(without);
   const moved = without.filter((row, index) => row.legitimacy !== baseline[index].legitimacy).length;
@@ -1186,121 +628,6 @@ if (marked.length > 0) {
 // ---------------------------------------------------------------------------------------------
 // Threshold sweep under cross-validation
 // ---------------------------------------------------------------------------------------------
-
-/**
- * Tunable scalars, swept out-of-fold.
- *
- * This is the one part of the audit that could quietly turn the holdout into training data, so the
- * protocol matters more than the result. Picking the value that scores best on the whole set would
- * measure how well a number can be fitted to a few thousand domains, which is not a question anyone
- * asked. Each fold chooses its value on four fifths of the families and is then scored on the fifth it never
- * saw, so what gets reported is what the *procedure* is worth on unseen domains rather than what the
- * best number is worth on seen ones. A change is only adopted when it wins that way.
- *
- * Folds are drawn over families, not domains, for the same reason the intervals are: splitting one
- * operator's names across train and test would leak the answer and make every knob look adoptable.
- */
-type Knob = {
-  id: string;
-  current: number;
-  values: number[];
-  reason: string;
-  apply(cfg: ScoringConfig, value: number): void;
-};
-
-/**
- * The values swept are whole points throughout, which is a constraint on the search and not an accident
- * of which numbers were typed. The point tables are meant to be added up by hand from the evidence list
- * in a response, and a fractional weight breaks that for a gain the sweep cannot distinguish from its
- * neighbours anyway. A first pass allowing halves picked 1.5 over 1 and 2; the difference between them is
- * well inside what a different fold split would move.
- */
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-const KNOBS: Knob[] = [
-  {
-    id: 'configuration.recordBreadthPerClass',
-    current: DEFAULT_CONFIG.configuration.recordBreadthPerClass,
-    values: [1, 2, 3],
-    reason:
-      'the credit fires on most of the abuse group and its removal moves a large number of abuse domains out of a legitimate band, so it may simply be priced too high',
-    apply: (cfg, value) => {
-      (cfg.configuration as any).recordBreadthPerClass = value;
-    },
-  },
-  {
-    id: 'clamps.configuration.max',
-    current: DEFAULT_CONFIG.clamps.configuration.max,
-    values: [4, 6, 8, 10, 12],
-    reason: 'the same credit again, bounded rather than repriced',
-    apply: (cfg, value) => {
-      (cfg.clamps.configuration as any).max = value;
-    },
-  },
-  {
-    id: 'age.oldestTierPoints',
-    current: 20,
-    values: [8, 12, 16, 20],
-    reason: 'age is the strongest dimension, and the top of its positive range is the least evidenced part',
-    apply: (cfg, value) => {
-      const tiers = cfg.age.tiers as any[];
-      tiers[tiers.length - 1].points = value;
-    },
-  },
-  {
-    id: 'combinations.totalCap',
-    current: DEFAULT_CONFIG.combinations.totalCap,
-    values: [20, 30, 40, 50, 60],
-    reason: 'bounds how much the conjunctions may say in total, and was never measured',
-    apply: (cfg, value) => {
-      (cfg.combinations as any).totalCap = value;
-    },
-  },
-  {
-    id: 'signup.freeRouting',
-    current: DEFAULT_CONFIG.signup.freeRouting,
-    values: [-27, -24, -21, -18, -15, -12],
-    reason: 'the largest single contributor to band-level recall, previously swept only in-sample',
-    apply: (cfg, value) => {
-      (cfg.signup as any).freeRouting = value;
-    },
-  },
-  {
-    id: 'site.hostedPlatform',
-    current: DEFAULT_CONFIG.site.hostedPlatform,
-    values: [0, 2, 4, 6],
-    reason:
-      'a reinstated credit entered at zero so shipping nothing is among the candidates, and capped low because clamps.site.max is 6 and substantiveContent alone reaches it',
-    apply: (cfg, value) => {
-      (cfg.site as any).hostedPlatform = value;
-    },
-  },
-  {
-    id: 'site.parked',
-    current: DEFAULT_CONFIG.site.parked,
-    values: [-18, -15, -12, -9, -6],
-    reason: 'the signal where ranking and bands disagree most sharply',
-    apply: (cfg, value) => {
-      (cfg.site as any).parked = value;
-    },
-  },
-  /*
-   * The two 1.5.0 weights, entered at zero so that the sweep places them rather than confirming a
-   * number somebody chose first. A knob whose current value is zero is the honest way to ask this
-   * question: every candidate is judged against shipping nothing, so the signal has to earn its weight
-   * outright instead of defending one it was given.
-   */
-  {
-    id: 'signup.wildcardMx',
-    current: DEFAULT_CONFIG.signup.wildcardMx,
-    values: [0, -3, -6, -9, -12, -15],
-    reason: 'a new signal, and the only one that observes unlimited addressing directly rather than inferring it from a provider class',
-    apply: (cfg, value) => {
-      (cfg.signup as any).wildcardMx = value;
-    },
-  },
-];
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 const FOLDS = 5;
 

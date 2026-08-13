@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { collectSite } from '@/lib/collect/site';
-import { BUDGET } from '@/lib/collector';
+import { BUDGET } from '@/lib/budget';
 import { probe } from '@/lib/fetch';
+import { page, redirectTo, restoreFetchBetweenTests, stubNetwork } from './helpers/network';
 
 /**
  * Redirects are followed by `lib/fetch.ts` rather than by the runtime, for two reasons that these pin.
@@ -13,30 +14,7 @@ import { probe } from '@/lib/fetch';
  * reported back with the status, size and title attached to the result.
  */
 
-const originalFetch = globalThis.fetch;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  vi.restoreAllMocks();
-});
-
-function stubNetwork(handler: (url: string) => Response) {
-  const urls: string[] = [];
-  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    urls.push(url);
-    return handler(url);
-  }) as unknown as typeof fetch;
-  return { urls };
-}
-
-const redirectTo = (location: string) =>
-  new Response(null, { status: 302, headers: { location } });
-
-const page = (title: string) =>
-  new Response(`<html><head><title>${title}</title></head><body>${'x '.repeat(400)}</body></html>`, {
-    status: 200,
-  });
+restoreFetchBetweenTests();
 
 describe('redirect chain', () => {
   it('follows an ordinary redirect and reports where it landed', async () => {

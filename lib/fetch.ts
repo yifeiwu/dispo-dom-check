@@ -1,10 +1,5 @@
-import {
-  BUDGET,
-  HttpError,
-  RateLimitedError,
-  TimeoutError,
-  USER_AGENT,
-} from './collector';
+import { BUDGET, USER_AGENT } from './budget';
+import { HttpError, RateLimitedError, TimeoutError } from './errors';
 import { isIpLiteral, isReservedName } from './domain-syntax';
 import { capture } from './record';
 
@@ -180,7 +175,7 @@ async function request(
  * URL and distinguishes them only by the form body. Left out, every domain in a recording would
  * share a key and replay would answer all of them with whichever was captured first.
  */
-function descriptorFor(call: 'fetchText' | 'probe' | 'exists', url: string, options: FetchOptions) {
+function descriptorFor(call: 'fetchText' | 'probe', url: string, options: FetchOptions) {
   const headers = Object.fromEntries(
     Object.entries(options.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
   );
@@ -269,24 +264,6 @@ export async function probe(url: string, options: FetchOptions = {}): Promise<Pr
         body: await readCapped(response, options.maxBytes ?? BUDGET.maxBodyBytes),
         headers: response.headers,
       };
-    },
-  );
-}
-
-/** HEAD-like existence check that treats any transport failure as absence rather than an error. */
-export async function exists(url: string, timeoutMs: number): Promise<number | null> {
-  const options: FetchOptions = { timeoutMs, redirect: 'manual' };
-  return capture(
-    descriptorFor('exists', url, options),
-    { encode: (status) => ({ status }), decode: (exchange) => exchange.status ?? null, onMiss: () => null },
-    async () => {
-      try {
-        const { response } = await request(url, options);
-        await response.body?.cancel().catch(() => undefined);
-        return response.status;
-      } catch {
-        return null;
-      }
     },
   );
 }
