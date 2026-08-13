@@ -286,15 +286,20 @@ export default function HowItWorks() {
       <Section id="exclusions">
         <ul className="max-w-3xl space-y-2 text-base leading-relaxed text-ink-muted">
           <li>
-            <span className="font-medium text-ink">Nothing is scored on a third party&rsquo;s opinion. </span>
-            No blocklist is consulted and no feed is asked whether a domain is bad, so the model
-            generalises to a domain registered minutes ago that nobody has seen. The cost is that it can
-            never report a domain as known bad, only as structurally risky. What a third party had to{' '}
-            <em>agree</em> to is the opposite case, and the evidence the model most prefers: a mail vendor
-            publishing the record that authorises this domain to report to it, or a certificate authority
-            issuing a mark certificate against a registered trademark. Those are facts somebody else
-            established, not judgements somebody else made, and each is checked rather than taken on
-            trust.
+            <span className="font-medium text-ink">No third-party reputation feeds. </span>
+            No blocklist is downloaded and no feed is polled for whether a domain is bad, so the model
+            generalises to a domain registered minutes ago that nothing has seen yet. One point lookup is
+            the exception: where an API key is configured, Check-Mail is asked about the single domain
+            being analysed, and its disposable verdict and risk score are priced while the vendor&rsquo;s
+            own block recommendation is not. That lookup is optional, it carries no weight in confidence,
+            and every other signal scores identically without it, so the cost stands either way — this
+            reports a domain as structurally risky far better than it reports one as known bad. A
+            judgement somebody else made is the weakest evidence here for the same reason it is the only
+            one bought: it cannot be inspected or reproduced. What a third party had to <em>agree</em> to
+            is the opposite case, and the evidence the model most prefers: a mail vendor publishing the
+            record that authorises this domain to report to it, or a certificate authority issuing a mark
+            certificate against a registered trademark. Those are facts somebody else established, not
+            judgements somebody else made, and each is checked rather than taken on trust.
           </li>
           <li>
             <span className="font-medium text-ink">No deliverability checks. </span>

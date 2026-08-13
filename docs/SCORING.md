@@ -228,7 +228,9 @@ The reporting vendor is the exception because RFC 7489 §7.1 makes it checkable.
 to a destination outside the domain's own namespace requires that destination to authorise it, by
 publishing a DMARC record at `<domain>._report._dmarc.<vendor>`, and only the vendor can create that. It
 is one DNS query, it runs only where a vendor was named, and it is the single place in the model where a
-third party is asked to confirm something.
+third party is asked to *confirm* something. The Check-Mail lookup also reaches outside the domain, but
+it is asked for a verdict rather than a confirmation, which is why it is scored as a judgement and this
+is scored as a fact.
 
 The tri-state matters. A vendor that has not vouched for the domain earns nothing, and a query the
 resolver could not answer also earns nothing, because silence is not a refusal. Neither is a penalty:

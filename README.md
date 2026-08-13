@@ -27,7 +27,8 @@ created to do so. That single decision drives everything else:
 - Registration economics and age come next. Price, age and mail-provider class capture most of the
   available value.
 - Phishing-oriented signals are excluded rather than merely down-weighted. Lookalike names, hosting
-  reputation and blocklist membership do not describe this abuse.
+  reputation and phishing-feed membership do not describe this abuse. The one reputation lookup that is
+  consulted is asked about disposability and risk, which do.
 
 Every credit keys on evidence **somebody other than the domain had to supply**, which is the thing an
 account farmer cannot mint at scale. A record a domain publishes about itself is still collected and

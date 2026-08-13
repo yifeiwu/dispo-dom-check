@@ -184,9 +184,11 @@ lookup would parse as a registry that publishes nothing.
   domain names its own, and the issuers host them, so in practice this is a request to `vmc.digicert.com`
   or an equivalent.
 - **It is the only request in the model made to a party the domain merely names**, which needs stating
-  plainly given the "no reputation lookups" claim elsewhere. What is fetched is a document, and it is
+  plainly given the "no reputation *feeds*" claim elsewhere. What is fetched is a document, and it is
   judged on whether it verifies cryptographically — not on any opinion the issuer holds about the domain.
-  A certificate that fails any check scores nothing, and no third party is asked what it thinks.
+  A certificate that fails any check scores nothing, and the issuer is never asked what it thinks. The
+  one place this model does buy somebody's opinion is the Check-Mail lookup below, which is named as
+  such and priced on two fields.
 - Two gates in series make it rare. The DMARC gate opens on 5.5% of analyses, and of the holdout domains
   behind it, 5 published a BIMI record and 1 named a certificate: roughly **one fetch per nine hundred
   analyses**.
