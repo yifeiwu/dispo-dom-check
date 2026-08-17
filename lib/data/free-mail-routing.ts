@@ -41,6 +41,19 @@ export const FREE_MAIL_ROUTING_MX: readonly MxFingerprint[] = [
   { provider: 'Mailfence', patterns: ['mailfence.com'] },
 ];
 
+/*
+ * Porkbun's free forwarding (`fwd1.porkbun.com`, `fwd2.porkbun.com`) was added here and taken out again,
+ * recorded so that the next reader does not repeat the work. It looks like the registrar entry above and
+ * is not: the registrar publishes that catch-all and wildcard forwarding are unsupported and that a
+ * domain gets twenty addresses, so the marginal cost of the thousandth address is not zero, it is
+ * unavailable. That is the whole reason this table is weighted as heavily as it is, and an entry that
+ * fails it does not belong regardless of the service being free.
+ *
+ * It is left unmatched rather than moved somewhere gentler. There is no class here for bounded cheap
+ * aliasing, inventing one to hold a single provider would be a table built for an audience of one, and
+ * `unknown_host` already says the true thing: nothing about this domain's mail is known to be cheap.
+ */
+
 /**
  * Corroboration for the free-routing fingerprint that dominates this class, verified during design.
  * Held as data so the collector can confirm the match two further ways when the MX hostname alone is
@@ -70,6 +83,12 @@ export const PAID_MAIL_MX: readonly MxFingerprint[] = [
   { provider: 'registrar paid mailbox product', patterns: ['privateemail.com', 'web-hosting.com'] },
   { provider: 'Proton Mail paid custom domain', patterns: ['protonmail.ch', 'proton.me', 'protonmail.com'] },
   { provider: 'Rackspace Email', patterns: ['emailsrvr.com'] },
+  /*
+   * Unlimited aliases and unlimited custom domains, which reads like the forwarder table this was moved
+   * out of, but there is no free tier behind any of it: every plan is paid after a seven-day trial. The
+   * criterion here is spend per mailbox rather than how many addresses a mailbox can answer to.
+   */
+  { provider: 'StartMail', patterns: ['startmail.com'] },
   { provider: 'Titan Mail', patterns: ['titan.email'] },
   { provider: 'MXroute', patterns: ['mxrouting.net'] },
   { provider: 'Cisco Secure Email', patterns: ['iphmx.com'] },
@@ -77,6 +96,22 @@ export const PAID_MAIL_MX: readonly MxFingerprint[] = [
   { provider: 'Sophos Email', patterns: ['sophos.com'] },
   { provider: 'StackMail', patterns: ['stackmail.com'] },
 ];
+
+/*
+ * iCloud+ custom domains (`mx01.mail.icloud.com`) were added here and removed, recorded for the same
+ * reason as the declined free-routing entry above: it is an obvious-looking member that fails the
+ * table's own criterion.
+ *
+ * Every other member charges for the mailbox: another address means another bill, which is what makes a
+ * match evidence of spend on *this* domain. One iCloud+ subscription starts around a dollar a month and
+ * carries five domains at three addresses each, so a match evidences a subscription somebody already had
+ * for their photographs. That is a credit an operator can mint five times over for the price of one, and
+ * a credit nothing can confirm is exactly what the rule about credits exists to keep out.
+ *
+ * Not being here costs nothing: the exchanger goes unrecognised, the domain scores neutrally on the
+ * dimension, and the surrounding signals decide. The claim being declined is only that paying Apple a
+ * dollar says something about a domain.
+ */
 
 /**
  * Shared consumer mail infrastructure found on someone else's domain.

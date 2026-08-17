@@ -112,5 +112,40 @@ export const KNOBS: Knob[] = [
       (cfg.signup as any).wildcardMx = value;
     },
   },
+  /*
+   * The two weights whose populations changed when the fingerprint tables were reconciled: `forwarder`
+   * gained Burner Mail from the temp-mail table, and `paidTenant` gained StartMail from the forwarder
+   * table. Neither number was chosen for the set of providers it now prices, and a weight that was right
+   * for the old membership is only accidentally right for the new one, so both are asked the question
+   * again rather than assumed to have survived it.
+   *
+   * Zero is among the candidates for the same reason it is above: `signup.forwarder` in particular sits
+   * beside a documented decision that alias capability is flagged for the consumer rather than
+   * condemned, and the sweep is where that position either holds or is contradicted by the data.
+   *
+   * Both held at their current values, 5/5 folds each, on the first run after the tables moved. That is
+   * a weaker result than it looks: the moves shifted one holdout domain apiece, so what the sweep
+   * establishes is that the change did not disturb them, not that either number has been confirmed.
+   */
+  {
+    id: 'signup.forwarder',
+    current: DEFAULT_CONFIG.signup.forwarder,
+    values: [0, -3, -6, -9, -12, -15],
+    reason:
+      'its population changed with the Burner Mail move, and the model states elsewhere that alias capability is flagged rather than penalised, which a non-zero weight contradicts',
+    apply: (cfg, value) => {
+      (cfg.signup as any).forwarder = value;
+    },
+  },
+  {
+    id: 'signup.paidTenant',
+    current: DEFAULT_CONFIG.signup.paidTenant,
+    values: [0, 2, 4, 6, 8],
+    reason:
+      'the only credit in the primary dimension, and its membership now extends past the business suites it was set for, so what it is worth is a different question',
+    apply: (cfg, value) => {
+      (cfg.signup as any).paidTenant = value;
+    },
+  },
 ];
 /* eslint-enable @typescript-eslint/no-explicit-any */

@@ -12,6 +12,11 @@ import type { MxFingerprint } from './mx-match';
  *
  * Entries are the publicly documented mail exchangers of well-known throwaway-inbox services. Extending
  * this table is ordinary maintenance work; a missing operator costs recall on the primary dimension.
+ *
+ * What belongs here is an inbox that expires. An alias that is permanent until its owner deletes it, and
+ * that forwards to a mailbox the owner already had, is the alias arrangement `FORWARDER_MX` describes,
+ * and this table is checked first and at more than three times the weight. Burner Mail was carried here
+ * and has moved for that reason, having been listed as a relay domain the whole time.
  */
 export const TEMP_MAIL_MX: readonly MxFingerprint[] = [
   { provider: 'Guerrilla Mail', patterns: ['guerrillamail.com', 'guerrillamail.net', 'guerrillamail.org', 'grr.la', 'sharklasers.com', 'spam4.me'] },
@@ -47,7 +52,6 @@ export const TEMP_MAIL_MX: readonly MxFingerprint[] = [
   { provider: 'Chacuo', patterns: ['chacuo.net'] },
   { provider: 'Luxusmail', patterns: ['luxusmail.org'] },
   { provider: 'Internxt Temporary Email', patterns: ['internxt.com'] },
-  { provider: 'Burner Mail', patterns: ['burnermail.io'] },
 ];
 
 /**

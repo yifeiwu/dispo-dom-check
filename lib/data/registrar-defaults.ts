@@ -22,6 +22,14 @@ const REGISTRAR_DEFAULTS: readonly RegistrarDefault[] = [
   },
 ];
 
+/*
+ * Porkbun was drafted as a second entry and dropped. The detector only runs where the mail already
+ * classified as free routing, and that registrar's forwarding does not qualify for the free-routing
+ * table, so the entry could never have fired; see the note in `lib/data/free-mail-routing.ts`. The
+ * requirement that all three components agree is what makes this table safe, and an entry whose third
+ * component is unreachable is not a high-confidence default, it is dead code that reads like coverage.
+ */
+
 function matchesSuffix(value: string, pattern: string): boolean {
   const normalised = value.toLowerCase().replace(/\.$/, '');
   return normalised === pattern || normalised.endsWith(`.${pattern}`);

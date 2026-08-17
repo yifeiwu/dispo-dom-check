@@ -325,9 +325,9 @@ feed fetched per request. Verified classes:
 | Temp-mail | Throwaway-inbox operators self-brand their mail exchangers, and keep the same ones as they rotate front-end domains. |
 | Temp-mail endpoints | The IPv4 addresses those services publish in their own custom-domain setup instructions, matched only where the mail exchanger sits inside the domain's own zone and so names nothing useful. This is adjacent to the hosting reputation rejected below, and the distinction is that it matches a specific documented mail endpoint rather than judging an ASN or a prefix; the precedent is the routing-prefix corroboration that has shipped since `1.0.0`. Entries come from provider documentation only — fitting them to the labelled holdout would make every figure that holdout then produced circular. An endpoint that moves silently stops matching and costs nothing. |
 | Temp-mail ownership tokens | The apex TXT tokens those services ask a customer to publish to prove control of a domain. Read out of a record already fetched, so it costs no query. Restricted to apex-visible tokens: a provider that puts its token at a dedicated subdomain would cost a lookup on every analysis to find a record almost no domain has. |
-| Alias forwarders | Unmistakable per-provider mail exchangers. |
+| Alias forwarders | Unmistakable per-provider mail exchangers. The boundary against the temp-mail table above is whether the inbox expires: an alias that lives until its owner deletes it, forwarding to a mailbox they already had, is this class and not that one, which matters because that table is consulted first and at more than three times the weight. |
 | Shared relay domains | Matched on the submitted domain, since relay users receive mail at the provider's domain and never point their own MX. |
-| Paid mail tenancy | Business suites and enterprise mail gateways, used as a weak positive. |
+| Paid mail tenancy | Business suites, enterprise mail gateways and the paid-only privacy hosts, used as a weak positive. Membership turns on the bill scaling with the mailbox, which is what makes a match evidence of spend on this domain rather than of a subscription the operator already held. |
 | Consumer mail infrastructure | Matched on mail exchanger so that a large free provider's vanity domains route to `out_of_scope` generically, instead of requiring every one to be enumerated. |
 | Registrar defaults | Requires the RDAP registrar identity, its default nameservers and its bundled forwarding MX to agree. No component is negative alone. |
 | Redirect targets | Known parking, hosted-site and public-profile destinations are classified locally; an unrecognised external destination remains unknown rather than guessed. |
@@ -338,6 +338,18 @@ table, matched on apex or `www` CNAME target and split so that a free platform d
 `1.2.0` with `configuration.hosted_service` and the apex CNAME lookup that fed it. A business-services
 table, classifying autodiscovery, enrollment, SIP and calendaring targets into vendors, went in `1.3.0` for
 the reason above: pointing a CNAME or SRV record at a vendor requires no account with that vendor.
+
+Two providers were drafted into these tables and declined on the tables' own criteria, recorded here
+because both look like obvious members and the work is otherwise repeated. A registrar's free forwarding
+was proposed for free custom-domain routing and fails it, publishing that catch-all and wildcard
+forwarding are unsupported and capping a domain at twenty addresses: the thousandth address is not free
+there, it is unavailable, and that capability is the whole reason the class carries the weight it does.
+A consumer cloud subscription's custom-domain mail was proposed for paid tenancy and fails it, because
+one subscription of about a dollar a month carries five domains, so a match evidences a subscription the
+operator already had rather than spend on the domain in front of us. Both are left unmatched rather than
+placed somewhere gentler, which costs nothing: the exchanger goes unrecognised and the surrounding
+signals decide. The audit is what made both visible, in the same way it corrected the vetted-suffix list,
+and both were declined on the criterion rather than on the handful of labelled domains they touched.
 
 Because SMTP port 25 is unavailable from the deployment target, catch-all capability cannot be probed
 directly, and this MX-class inference is the substitute.

@@ -451,8 +451,13 @@ Reason codes matter more than the number, because a consumer can act on a reason
 | Very new | 11% | 0% | 3% | 0% |
 | Registry hold | 5% | 3% | 3% | 0% |
 | Parked | 2% | 4% | 2% | 3% |
-| Alias forwarder | 0% | 0% | 9% | 1% |
+| Alias forwarder | 0% | 0% | 9% | 2% |
 | Disposable | 0% | 0% | 0% | 0% |
+
+The forwarder row against `LEGITIMATE` reads 2% rather than 1% because the shared relay list was extended
+to the alias domains the two largest providers publish but this repository had not carried. It is the
+intended direction: the flag reports a capability and carries no points, so a legitimate domain that
+gains it keeps its verdict, and one more of them is now described accurately rather than silently missed.
 
 Three results carry most of the design decisions:
 
