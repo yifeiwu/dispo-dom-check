@@ -1,4 +1,5 @@
 import { BUDGET } from './budget';
+import { withDeadline } from './deadline';
 import { isOk, runCollector, type CollectorResult, type SourceId } from './collector';
 import { collectDns } from './collect/dns';
 import { collectRdap } from './collect/rdap';
@@ -62,6 +63,33 @@ export type AnalysisOptions = {
 export async function analyze(
   input: Extract<NormalisedInput, { kind: 'ok' }>,
   options: AnalysisOptions = {},
+): Promise<AnalysisResult> {
+  /*
+   * The global budget, as a thing that actually stops work rather than only as arithmetic.
+   *
+   * `remaining()` below shrinks the deadline given to each collector that has not started yet, which
+   * keeps the total honest but cannot touch a request already in flight. Without this, a source that
+   * began just inside the budget held its socket open behind a response that had already been returned.
+   *
+   * The abort in `finally` covers the ordinary path rather than the timeout: by the time an analysis
+   * returns, every collector it is going to report has settled, and anything still running belongs to
+   * nobody. The registry bootstrap is the deliberate exception and detaches itself — see
+   * `lib/reference-cache.ts`.
+   */
+  const deadline = new AbortController();
+  const expiry = setTimeout(() => deadline.abort(), BUDGET.globalMs);
+
+  try {
+    return await withDeadline(deadline.signal, () => runAnalysis(input, options));
+  } finally {
+    clearTimeout(expiry);
+    deadline.abort();
+  }
+}
+
+async function runAnalysis(
+  input: Extract<NormalisedInput, { kind: 'ok' }>,
+  options: AnalysisOptions,
 ): Promise<AnalysisResult> {
   const startedAt = Date.now();
   const analysedAt = new Date().toISOString();

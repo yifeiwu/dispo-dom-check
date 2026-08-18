@@ -33,6 +33,16 @@ export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
 /**
+ * Every response from this endpoint, not only the successful ones.
+ *
+ * A fresh lookup per request is the requirement, and a stale verdict on a domain that was clean last
+ * week is worse than a slow one. The rejections need it just as much: a 400 or a 429 held by an
+ * intermediary would answer a later request about a different domain, or keep refusing a client whose
+ * window has long since rolled over.
+ */
+const NO_STORE = { 'cache-control': 'no-store' } as const;
+
+/**
  * Light in-memory rate limit. Serverless instances are not shared, so this is a courtesy brake against
  * a single client hammering the free upstream APIs rather than a security control. A real limit needs the
  * shared store that the cache interface is already waiting for.
@@ -40,7 +50,8 @@ export const dynamic = 'force-dynamic';
 const RATE_LIMIT = { windowMs: 60_000, maxRequests: 20 };
 const hits = new Map<string, number[]>();
 
-function rateLimited(key: string): boolean {
+/** Whether this client is over the limit, and when the oldest request in its window falls out of it. */
+function rateLimited(key: string): { limited: boolean; retryAfterSeconds: number } {
   const now = Date.now();
   const recent = (hits.get(key) ?? []).filter((at) => now - at < RATE_LIMIT.windowMs);
   recent.push(now);
@@ -53,7 +64,32 @@ function rateLimited(key: string): boolean {
     }
   }
 
-  return recent.length > RATE_LIMIT.maxRequests;
+  // When the oldest request still counted against this client expires, there is room for another. A
+  // caller told only that it was refused has to guess, and guessing badly is how a polite client turns
+  // into the thing this brake exists to stop.
+  const oldest = recent[0] ?? now;
+  const retryAfterSeconds = Math.max(1, Math.ceil((RATE_LIMIT.windowMs - (now - oldest)) / 1000));
+
+  return { limited: recent.length > RATE_LIMIT.maxRequests, retryAfterSeconds };
+}
+
+/**
+ * Who to count this request against.
+ *
+ * Both headers are set by the proxy in front of the function rather than by the caller, and neither is
+ * trustworthy beyond that: `x-forwarded-for` is a list a client can prepend to, so only the hop the
+ * proxy appended means anything, and this reads the first entry because that is the convention on the
+ * platform this deploys to.
+ *
+ * The fallback matters more than which header wins. Keyed to a single `unknown` bucket, every caller
+ * arriving without either header shares one allowance, so twenty requests from anywhere lock out
+ * everyone else in the same position — a brake against one heavy client turned into an outage for all
+ * the light ones. Requests that cannot be attributed are better left uncounted: this limit is a
+ * courtesy to the free upstreams rather than a security control, and it says so.
+ */
+function clientKey(request: Request): string | null {
+  const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  return forwarded || request.headers.get('x-real-ip')?.trim() || null;
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -73,16 +109,19 @@ export async function POST(request: Request): Promise<Response> {
 }
 
 async function handle(raw: string, request: Request): Promise<Response> {
-  const clientKey =
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+  const key = clientKey(request);
+  const limit = key ? rateLimited(key) : null;
 
-  if (rateLimited(clientKey)) {
+  if (limit?.limited) {
     return NextResponse.json(
       {
         error: 'rate_limited',
         message: 'Too many analyses from this client. The upstream sources are free, so please go easy.',
       },
-      { status: 429 },
+      {
+        status: 429,
+        headers: { ...NO_STORE, 'retry-after': String(limit.retryAfterSeconds) },
+      },
     );
   }
 
@@ -93,12 +132,12 @@ async function handle(raw: string, request: Request): Promise<Response> {
     // can go wrong *after* this point still returns 200 with partial results.
     return NextResponse.json(
       { error: input.reason, message: input.explanation },
-      { status: 400 },
+      { status: 400, headers: NO_STORE },
     );
   }
 
   if (input.kind === 'out_of_scope') {
-    return NextResponse.json(toOutOfScopeResponse(input));
+    return NextResponse.json(toOutOfScopeResponse(input), { headers: NO_STORE });
   }
 
   if (wantsStream(request)) return streamed(input);
@@ -106,15 +145,14 @@ async function handle(raw: string, request: Request): Promise<Response> {
   try {
     const result = await analyze(input);
 
-    return NextResponse.json(toAnalyzeResponse(result), {
-      // Never cached: a fresh lookup per request is the current requirement, and a stale verdict on a
-      // domain that was clean last week is worse than a slow one.
-      headers: { 'cache-control': 'no-store' },
-    });
+    return NextResponse.json(toAnalyzeResponse(result), { headers: NO_STORE });
   } catch (error) {
     // Reaching here means a bug rather than a source failure, since every collector converts its own
     // failures into a status. Report it as a server error rather than as a verdict about the domain.
-    return NextResponse.json({ ...FAULT, detail: detailOf(error) }, { status: 500 });
+    return NextResponse.json(
+      { ...FAULT, detail: detailOf(error) },
+      { status: 500, headers: NO_STORE },
+    );
   }
 }
 
@@ -156,8 +194,8 @@ function streamed(input: Extract<NormalisedInput, { kind: 'ok' }>): Response {
 
   return new Response(body, {
     headers: {
+      ...NO_STORE,
       'content-type': `${NDJSON_MEDIA_TYPE}; charset=utf-8`,
-      'cache-control': 'no-store',
       // Progress that arrives all at once is not progress. Named for nginx, which is the proxy most
       // likely to sit in front of this and buffer a response it thinks it is helping with.
       'x-accel-buffering': 'no',

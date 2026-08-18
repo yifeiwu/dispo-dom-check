@@ -47,10 +47,21 @@ export const page = (title: string): Response =>
 export const redirectTo = (location: string): Response =>
   new Response(null, { status: 302, headers: { location } });
 
-/** A host that accepts the connection and then says nothing, which is what a timeout actually is. */
+/**
+ * A host that accepts the connection and then says nothing, which is what a timeout actually is.
+ *
+ * A signal that has already aborted by the time the request is made rejects at once rather than waiting
+ * for an `abort` event that has been and gone. Without that this never settles, which is a property of
+ * the stub rather than of anything it stands in for: the real `fetch` refuses an aborted signal before
+ * it opens a socket.
+ */
 export function hang(signal: AbortSignal | null): Promise<Response> {
   return new Promise((_, reject) => {
     if (!signal) return;
+    if (signal.aborted) {
+      reject(signal.reason ?? new Error('aborted'));
+      return;
+    }
     signal.addEventListener('abort', () => reject(signal.reason ?? new Error('aborted')));
   });
 }

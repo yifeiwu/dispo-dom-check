@@ -1,3 +1,4 @@
+import { outsideDeadline } from './deadline';
 import { asSharedReference } from './record';
 
 /**
@@ -54,7 +55,11 @@ export async function withBackgroundRefresh<T>(
   if (!pending) {
     // Recorded apart from any one domain's transcript: this data is identical for every domain, and the
     // fetch happens under whichever analysis reached it first.
-    pending = asSharedReference(fetcher)
+    //
+    // Started outside that analysis's deadline for the same reason it is allowed to outlive the
+    // `Promise.race` below. Bounding it by the request that happened to trigger it would cancel it at the
+    // moment it stopped being waited on, which is precisely when it becomes worth finishing.
+    pending = outsideDeadline(() => asSharedReference(fetcher))
       .then((value) => {
         store.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
         return value;

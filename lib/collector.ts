@@ -15,7 +15,13 @@
  */
 
 import { BUDGET } from './budget';
-import { HttpError, RateLimitedError, TimeoutError, UnsupportedError } from './errors';
+import {
+  BlockedHostError,
+  HttpError,
+  RateLimitedError,
+  TimeoutError,
+  UnsupportedError,
+} from './errors';
 
 export type CollectorStatus =
   | 'ok'
@@ -94,6 +100,12 @@ export async function runCollector<T>(
     }
     if (error instanceof UnsupportedError) {
       return { ...base, status: 'unsupported', reason: error.message };
+    }
+    // Not `unsupported`, which says the source does not apply to this domain. The source applied and
+    // the address it named was refused, which is a thing that happened rather than a thing that does
+    // not exist here, and the reason carries the explanation.
+    if (error instanceof BlockedHostError) {
+      return { ...base, status: 'unavailable', reason: error.message };
     }
     if (error instanceof HttpError) {
       const status =

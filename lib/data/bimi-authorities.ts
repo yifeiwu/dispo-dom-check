@@ -107,6 +107,7 @@ export function authorityFor(distinguishedName: string): string | null {
  */
 export type VmcFailure =
   | 'no_certificate'
+  | 'refused_address'
   | 'unreachable'
   | 'unparseable'
   | 'empty_bundle'
@@ -132,6 +133,8 @@ export type VmcFailure =
 export const VMC_FAILURE_REASONS: Record<VmcFailure, string> = {
   no_certificate:
     'the record asks for a logo to be displayed but names no certificate at all, so nothing stands behind the mark',
+  refused_address:
+    'the record points at an address this checker will not request, such as a private or internal one, so the certificate was never fetched',
   unreachable: 'the certificate it names could not be retrieved',
   empty_bundle: 'the address it names did not return a certificate',
   unparseable: 'the file it names is not a readable certificate',

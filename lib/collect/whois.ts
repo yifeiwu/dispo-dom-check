@@ -1,6 +1,7 @@
 import { createConnection } from 'node:net';
 import { BUDGET } from '../budget';
 import { RateLimitedError, TimeoutError, UnsupportedError } from '../errors';
+import { currentDeadline } from '../deadline';
 import { capture } from '../record';
 import { findWhoisServer } from '../data/whois-servers';
 import { buildRegistrationFacts } from './registration';
@@ -56,12 +57,34 @@ async function query(server: string, term: string, timeoutMs: number): Promise<s
       new Promise<string>((resolve, reject) => {
         const chunks: Buffer[] = [];
         let total = 0;
+
+        /*
+         * The socket's own timeout bounds a stalled registry; this bounds one still talking after the
+         * analysis has stopped listening. It matters more here than anywhere else in the system: this is
+         * the slowest transport of the lot, and the only one where the response ends when the server
+         * decides it does, so there is no other moment at which an abandoned query would give up.
+         */
+        const deadline = currentDeadline();
+        if (deadline?.aborted) {
+          reject(new TimeoutError(timeoutMs));
+          return;
+        }
+
         const socket = createConnection({ host: server, port: WHOIS_PORT });
 
+        const release = () => deadline?.removeEventListener('abort', abandon);
+
         const fail = (error: Error) => {
+          release();
           socket.destroy();
           reject(error);
         };
+
+        function abandon() {
+          fail(new TimeoutError(timeoutMs));
+        }
+
+        deadline?.addEventListener('abort', abandon, { once: true });
 
         socket.setTimeout(timeoutMs);
         socket.on('timeout', () => fail(new TimeoutError(timeoutMs)));
@@ -77,7 +100,10 @@ async function query(server: string, term: string, timeoutMs: number): Promise<s
           chunks.push(chunk);
         });
 
-        socket.on('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        socket.on('close', () => {
+          release();
+          resolve(Buffer.concat(chunks).toString('utf8'));
+        });
       }),
   );
 }

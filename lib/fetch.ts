@@ -1,6 +1,7 @@
 import { BUDGET, USER_AGENT } from './budget';
-import { HttpError, RateLimitedError, TimeoutError } from './errors';
+import { BlockedHostError, HttpError, RateLimitedError, TimeoutError } from './errors';
 import { isIpLiteral, isReservedName } from './domain-syntax';
+import { currentDeadline } from './deadline';
 import { capture } from './record';
 
 /**
@@ -97,22 +98,47 @@ async function once(
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 /**
- * Whether the chain is allowed to continue to this target.
+ * The request's own deadline, and the analysis-wide one where there is one.
+ *
+ * Both have to be able to end a request, and they answer different questions. The per-source timeout is
+ * what reports a slow source as slow; the analysis deadline is what stops a source still working after
+ * the analysis has stopped waiting for it. Composed rather than chosen between, because the shorter of
+ * the two is not knowable in advance: a source started early is bounded by its own deadline, and one
+ * started late by what is left of the analysis.
+ *
+ * Absent outside an analysis, which is the case for the refresh scripts and most of the test suite, and
+ * the per-source deadline stands alone there.
+ */
+function boundedByAnalysis(own: AbortSignal): AbortSignal {
+  const analysis = currentDeadline();
+  return analysis ? AbortSignal.any([own, analysis]) : own;
+}
+
+/**
+ * Why this URL will not be requested, or `null` if it may be.
  *
  * `normaliseInput` rejects address literals and reserved names before anything is probed, but that
- * decision covers only the host the caller submitted. Every hop after it is a host chosen by the domain
- * under analysis, so without the same test the gate holds for exactly one hop: a name answering
- * `302 http://169.254.169.254/` would be fetched, read, and reported back with its status, size and
- * title attached to the result.
+ * decision covers only the host the caller submitted. Every other URL in the system is a host chosen by
+ * the domain under analysis — a redirect target, or the certificate a BIMI record names — so without
+ * the same test the gate holds for exactly one request: a name answering `302 http://169.254.169.254/`
+ * would be fetched, read, and reported back with its status, size and title attached to the result.
+ *
+ * Returns a reason rather than a boolean because one of the two callers has to explain itself. A
+ * refused hop has a response already in hand to report; a refused initial URL has nothing, and "the
+ * source was unavailable" would describe an upstream fault rather than our own decision.
  *
  * Known limit: a public name that resolves to a private address still passes. Catching that needs the
  * probe to resolve the name and pin the address it connects to, rather than test the string, which is a
  * larger change than this guard and is not attempted here.
  */
-function hopAllowed(target: URL): boolean {
-  if (target.protocol !== 'https:' && target.protocol !== 'http:') return false;
+function refusalReason(target: URL): string | null {
+  if (target.protocol !== 'https:' && target.protocol !== 'http:') {
+    return `Refused to request a ${target.protocol} URL: only http and https are fetched`;
+  }
   const host = target.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
-  return !isIpLiteral(host) && !isReservedName(host);
+  if (isIpLiteral(host)) return `Refused to request ${host}: an address literal is not a public host`;
+  if (isReservedName(host)) return `Refused to request ${host}: a reserved name is not a public host`;
+  return null;
 }
 
 /**
@@ -128,13 +154,28 @@ function hopAllowed(target: URL): boolean {
  * A refused or over-long chain returns the last response reached, which is the redirect itself. That is
  * the honest reading: the domain answered and pointed somewhere this probe will not go, so the site is
  * reachable but not substantive, and nothing about the target is read or reported.
+ *
+ * The initial URL faces the same test, and is the reason this guard is not only about redirects. Most
+ * callers pass a URL this process composed, but not all of them: the BIMI collector fetches the
+ * certificate a domain's own TXT record names, so a domain that publishes an enforcing DMARC policy —
+ * which is also its own to publish — can name any address it likes and have it requested from here.
+ * A refusal throws, because unlike a hop there is no response to hand back.
  */
 async function request(
   url: string,
   options: FetchOptions,
 ): Promise<{ response: Response; finalUrl: string }> {
   const mode = options.redirect ?? 'follow';
-  const signal = AbortSignal.timeout(options.timeoutMs ?? BUDGET.perSourceMs);
+  const signal = boundedByAnalysis(AbortSignal.timeout(options.timeoutMs ?? BUDGET.perSourceMs));
+
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    throw new BlockedHostError(`Refused to request ${url}: not a valid URL`);
+  }
+  const refusal = refusalReason(target);
+  if (refusal) throw new BlockedHostError(refusal);
 
   if (mode !== 'follow') {
     return { response: await once(url, options, mode, signal), finalUrl: url };
@@ -153,7 +194,7 @@ async function request(
     } catch {
       break;
     }
-    if (!hopAllowed(next)) break;
+    if (refusalReason(next)) break;
 
     // The body of a redirect is never read, and leaving it open holds the connection for the rest of
     // the chain.

@@ -9,6 +9,7 @@ import Home from '@/app/page';
 import { establishedSmallBusiness } from './fixtures';
 import { score } from '@/lib/scoring/score';
 import { toAnalyzeResponse, toOutOfScopeResponse } from '@/lib/api-response';
+import { NDJSON_MEDIA_TYPE } from '@/lib/api-types';
 import type { AnalyzeResponse, ErrorResponse, OutOfScopeResponse } from '@/lib/api-types';
 
 /**
@@ -59,6 +60,22 @@ const SERVICE_ERROR: ErrorResponse = {
   message:
     'The analysis could not be completed. This is a fault in the service, not a finding about the domain.',
 };
+
+/** A progress stream, which is the branch the client prefers when the endpoint offers it. */
+function ndjsonReply(...lines: string[]): Response {
+  const encoder = new TextEncoder();
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': `${NDJSON_MEDIA_TYPE}; charset=utf-8` }),
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const line of lines) controller.enqueue(encoder.encode(`${line}\n`));
+        controller.close();
+      },
+    }),
+  } as unknown as Response;
+}
 
 /** A plain JSON reply, which is the non-streaming branch the client falls back to. */
 function jsonReply(body: unknown, status = 200): Response {
@@ -200,6 +217,28 @@ describe('accessibility', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toMatch(/check your connection/i);
+    await expectNoViolations(container);
+  });
+
+  /**
+   * A corrupt line is the one failure that used to be reported as the opposite of what it was. It
+   * reached the same `catch` a dropped connection does and was announced as the request never arriving —
+   * to a reader who had just watched the source list fill in from that very stream.
+   */
+  it('blames the service rather than the reader for a corrupt progress stream', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        ndjsonReply('{"type":"source","source":"dns","status":"ok","elapsedMs":5}', 'not json'),
+      ),
+    );
+
+    const { container } = render(<Home />);
+    submit();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/fault in the service/i);
+    expect(alert.textContent).not.toMatch(/check your connection/i);
     await expectNoViolations(container);
   });
 

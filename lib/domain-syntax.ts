@@ -37,13 +37,37 @@ const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 const LOCAL_SUFFIXES = new Set(['localhost', 'local', 'internal', 'test', 'example', 'invalid', 'onion']);
 
 /**
+ * The form a URL parser and a resolver will actually use, which is not always the form submitted.
+ *
+ * `https://` is prepended because a bare host is not a URL, and the parser is the same one `toAscii`
+ * applies a few steps later. An input it cannot parse is returned untouched, so the caller still gets
+ * to test something rather than nothing.
+ */
+function canonicalHost(host: string): string {
+  try {
+    return new URL(`https://${host}`).hostname;
+  } catch {
+    return host;
+  }
+}
+
+/**
  * An address literal rather than a name.
+ *
+ * Tested against the canonical form rather than the submitted text, because the two disagree in
+ * exactly the cases that matter. `127.1`, `0177.0.0.1` and `2130706433` are all addresses to every
+ * resolver, and none of them is a dotted quad as written: submitted here they read as names, passed
+ * this gate, and were turned into `127.0.0.1` by `toAscii` a few steps later — after the only check
+ * that would have refused them. The gate has to test the string the collectors will be handed, not
+ * the one the caller typed.
  *
  * Exported because the boundary is not the only place this question is asked: a redirect target is a
  * host chosen by the domain under analysis, and it has to face the same test the submitted host did.
  */
 export function isIpLiteral(host: string): boolean {
-  return IPV4.test(host) || host.includes(':');
+  // Checked before parsing: an IPv6 literal is bracketed in a URL and bare at this boundary, and the
+  // bare form is not something `new URL` will accept.
+  return host.includes(':') || IPV4.test(canonicalHost(host));
 }
 
 /** A reserved or special-use name, which has no public registration behind it. */

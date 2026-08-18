@@ -75,6 +75,28 @@ describe('normaliseInput', () => {
     expect(normaliseInput('[2001:db8::1]').kind).toBe('rejected');
   });
 
+  /**
+   * An address does not have to be written as a dotted quad to be one, and the gate used to test the
+   * text rather than the address it denotes. `127.1` was accepted as a name, and `toAscii` then handed
+   * the collectors `127.0.0.1`, which the site probe duly fetched: a request to the loopback interface
+   * of the machine running the analysis, asked for through the public form. `0177.0.0.1` was worse,
+   * arriving as `0.0.0.1` — a different address from the one submitted, which is its own argument for
+   * canonicalising before deciding rather than after.
+   */
+  it.each([
+    ['a short-form address', '127.1'],
+    ['an octal address', '0177.0.0.1'],
+    ['an integer address', '2130706433'],
+    ['a hexadecimal address', '0x7f000001'],
+  ])('rejects %s, which resolves to one even though it is not written as one', (_case, input) => {
+    expect(normaliseInput(input).kind, input).toBe('rejected');
+  });
+
+  it('still accepts a name that merely looks numeric', () => {
+    expect(normaliseInput('123.com').kind).toBe('ok');
+    expect(normaliseInput('1.2.3.4.com').kind).toBe('ok');
+  });
+
   it('rejects reserved and special-use names', () => {
     for (const input of ['localhost', 'server.local', 'thing.internal', 'site.test', 'x.invalid']) {
       const result = normaliseInput(input);

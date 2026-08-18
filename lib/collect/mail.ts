@@ -1,6 +1,7 @@
 import { txtAt, txtAtFollowingCname } from './dns';
 import { splitBudget } from '../budget';
 import { fetchText } from '../fetch';
+import { BlockedHostError } from '../errors';
 import { parseBimiRecord, verifyVmc } from '../bimi-vmc';
 import {
   COMMERCIAL_DMARC_VENDORS,
@@ -171,15 +172,37 @@ async function collectBimi(
     return { record: true, verified: false, failure: 'no_certificate' };
   }
 
-  let pem: string;
-  try {
-    pem = await fetchText(parsed.certificateUrl, { timeoutMs });
-  } catch {
+  /*
+   * The `a=` tag is the one URL in the system a domain under analysis chooses for us, and it is
+   * fetched from the server. The BIMI specification requires HTTPS for the evidence document, which
+   * settles the scheme question on its own terms — a trust artifact retrieved over plaintext is not
+   * one — and refusing anything else here means a record naming `file:///etc/passwd` never reaches
+   * the transport.
+   *
+   * `fetchText` refuses private and reserved hosts as well, so an `https://169.254.169.254/` arrives
+   * back as `BlockedHostError`. Both refusals report as the same failure because they are the same
+   * finding for a reader: the record named somewhere this checker will not go, and no certificate was
+   * retrieved. Distinguishing them from `unreachable` matters more than distinguishing them from each
+   * other, since that one says the address was tried and did not answer.
+   */
+  if (!isHttpsUrl(parsed.certificateUrl)) {
     return {
       record: true,
       certificateUrl: parsed.certificateUrl,
       verified: false,
-      failure: 'unreachable',
+      failure: 'refused_address',
+    };
+  }
+
+  let pem: string;
+  try {
+    pem = await fetchText(parsed.certificateUrl, { timeoutMs });
+  } catch (error) {
+    return {
+      record: true,
+      certificateUrl: parsed.certificateUrl,
+      verified: false,
+      failure: error instanceof BlockedHostError ? 'refused_address' : 'unreachable',
     };
   }
 
@@ -195,6 +218,15 @@ async function collectBimi(
     // reader shown only that verification failed has been told to take it on trust.
     failureDetail: result.detail,
   };
+}
+
+/** An `https:` URL and nothing else, including an unparseable one. */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /**

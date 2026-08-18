@@ -33,6 +33,21 @@ export class UnsupportedError extends Error {
   }
 }
 
+/**
+ * A URL this process declined to request, because its host is an address literal, a reserved name, or
+ * its scheme is not one we fetch.
+ *
+ * Distinct from the failures above because nothing was attempted and nothing went wrong upstream: the
+ * refusal is ours. Reporting it as a source that broke would send a reader looking for a fault that is
+ * not there, so the message says plainly that the request was refused and why.
+ */
+export class BlockedHostError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BlockedHostError';
+  }
+}
+
 export class HttpError extends Error {
   constructor(
     readonly statusCode: number,

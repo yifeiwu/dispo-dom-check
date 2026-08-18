@@ -11,6 +11,33 @@ export function encodeLine(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
 }
 
+/**
+ * A complete line that is not JSON.
+ *
+ * Typed rather than left as the `SyntaxError` that `JSON.parse` raises, because the caller has to tell
+ * this apart from the connection failing. Both arrive as a rejection from the same `await`, and read as
+ * the same thing to a reader unless they are distinguished: a corrupt line is something this service or
+ * something between it and the browser did, and telling somebody to check their connection over it
+ * sends them to look at the one part of the system that is working.
+ *
+ * Distinct from a *truncated* line, which is not an error at all. That is a stream cut mid-event, and it
+ * is reported by the absence of a terminal event rather than from here.
+ */
+export class MalformedLineError extends Error {
+  constructor() {
+    super('The analysis stream contained a line that was not valid JSON');
+    this.name = 'MalformedLineError';
+  }
+}
+
+function parseLine<T>(line: string): T {
+  try {
+    return JSON.parse(line) as T;
+  } catch {
+    throw new MalformedLineError();
+  }
+}
+
 export type LineParser<T> = {
   /** Complete lines contained in this chunk. A chunk may hold none, or several. */
   push(chunk: string): T[];
@@ -38,7 +65,7 @@ export function createLineParser<T>(): LineParser<T> {
       // beginning of a line whose remainder has not arrived yet. Either way it is not ready to parse.
       buffer = lines.pop() ?? '';
 
-      return lines.map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line) as T);
+      return lines.map((line) => line.trim()).filter(Boolean).map((line) => parseLine<T>(line));
     },
 
     flush(): T[] {

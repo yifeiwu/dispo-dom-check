@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { collectSite } from '@/lib/collect/site';
 import { BUDGET } from '@/lib/budget';
 import { probe } from '@/lib/fetch';
+import { BlockedHostError } from '@/lib/errors';
 import { page, redirectTo, restoreFetchBetweenTests, stubNetwork } from './helpers/network';
 
 /**
@@ -12,6 +13,9 @@ import { page, redirectTo, restoreFetchBetweenTests, stubNetwork } from './helpe
  * the chain is capped at twenty hops and revalidated nowhere, so the boundary's decision held for exactly
  * one request and a domain answering `302 http://169.254.169.254/` had its target fetched, read, and
  * reported back with the status, size and title attached to the result.
+ *
+ * The same test applies to the URL a request starts at, which is the other half of the guard and is
+ * covered at the bottom of this file. A hop is not the only way a domain gets to choose a host.
  */
 
 restoreFetchBetweenTests();
@@ -92,6 +96,52 @@ describe('redirect chain', () => {
 
     expect(urls).toEqual(['https://example.com/']);
     expect(result.status).toBe(302);
+  });
+});
+
+/**
+ * The initial URL gets the test every hop gets, because it is not always ours to choose. Most callers
+ * pass a URL this process composed from an already-validated domain, but the BIMI collector fetches the
+ * certificate a domain's own TXT record names, and a domain publishes its own DMARC policy too — so the
+ * one caller that takes a URL from the analysed domain also controls the condition that reaches it.
+ *
+ * A refusal throws rather than returning something, because unlike a hop there is no response in hand
+ * to report. `BlockedHostError` is its own type so `runCollector` can say the request was declined
+ * rather than that the source broke.
+ */
+describe('refusing the initial URL', () => {
+  it.each([
+    ['a loopback address', 'http://127.0.0.1:6379/'],
+    ['a link-local address', 'http://169.254.169.254/latest/meta-data/'],
+    ['a private address', 'http://10.0.0.1/'],
+    ['an IPv6 literal', 'http://[::1]/'],
+    ['localhost', 'http://localhost:8080/'],
+    ['a reserved suffix', 'http://admin.internal/'],
+    ['a non-http scheme', 'file:///etc/passwd'],
+    ['a short-form address', 'http://127.1/'],
+    ['an integer address', 'http://2130706433/'],
+  ])('refuses to request %s without touching the network', async (_case, target) => {
+    const { urls } = stubNetwork(() => page('Should never be fetched'));
+
+    await expect(probe(target)).rejects.toBeInstanceOf(BlockedHostError);
+    expect(urls).toEqual([]);
+  });
+
+  it('says the request was refused rather than that the host failed', async () => {
+    stubNetwork(() => page('Should never be fetched'));
+
+    await expect(probe('http://169.254.169.254/')).rejects.toThrow(
+      /Refused to request 169\.254\.169\.254/,
+    );
+  });
+
+  it('leaves an ordinary public URL alone', async () => {
+    const { urls } = stubNetwork(() => page('Hello'));
+
+    const result = await probe('https://example.com/');
+
+    expect(result.status).toBe(200);
+    expect(urls).toEqual(['https://example.com/']);
   });
 });
 

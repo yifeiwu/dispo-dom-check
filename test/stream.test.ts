@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { analyze } from '@/lib/analyze';
 import { normaliseInput } from '@/lib/domain';
-import { createLineParser, encodeLine, readNdjsonStream } from '@/lib/ndjson';
+import { MalformedLineError, createLineParser, encodeLine, readNdjsonStream } from '@/lib/ndjson';
 import type { AnalyzeStreamEvent } from '@/lib/api-types';
 import type { SourceStatus } from '@/lib/facts';
 
@@ -142,6 +142,35 @@ describe('reading a stream', () => {
     const stream = chunked(encoder.encode('{"n":1}\n{"n":'));
 
     expect(await collect(stream)).toEqual([{ n: 1 }]);
+  });
+
+  /**
+   * A truncated line and a corrupt one look alike and are not the same thing, so they are reported
+   * differently. The first is a stream that stopped, which the caller detects from the missing terminal
+   * event; the second is a complete line that is not JSON, which nothing downstream can recover from and
+   * which must not be mistaken for the connection failing — several events have already been read off
+   * the same stream by the time it happens.
+   */
+  it('names a complete line that is not JSON, rather than raising a bare syntax error', async () => {
+    const stream = chunked(encoder.encode('{"n":1}\nnot json at all\n'));
+
+    await expect(collect(stream)).rejects.toBeInstanceOf(MalformedLineError);
+  });
+
+  /**
+   * Events already delivered stay delivered. A chunk is parsed as a unit, so this is granular to the
+   * read rather than to the line — anything sharing a chunk with the corrupt line goes down with it.
+   * That costs nothing worth having: the caller is about to report a broken stream either way, and the
+   * events in question are progress updates on an analysis that is not going to produce a result.
+   */
+  it('keeps the events delivered before the read that failed', async () => {
+    const seen: unknown[] = [];
+    const stream = chunked(encoder.encode('{"n":1}\n{"n":2}\n'), encoder.encode('}{\n'));
+
+    await expect(
+      readNdjsonStream(stream, (event) => seen.push(event)),
+    ).rejects.toBeInstanceOf(MalformedLineError);
+    expect(seen).toEqual([{ n: 1 }, { n: 2 }]);
   });
 });
 

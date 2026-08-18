@@ -1,5 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { HttpError, RateLimitedError, TimeoutError, UnsupportedError } from './errors';
+import {
+  BlockedHostError,
+  HttpError,
+  RateLimitedError,
+  TimeoutError,
+  UnsupportedError,
+} from './errors';
 
 /**
  * Records the raw upstream responses an analysis reads, and replays them back into it.
@@ -23,7 +29,7 @@ import { HttpError, RateLimitedError, TimeoutError, UnsupportedError } from './e
  */
 
 export type RecordedError = {
-  kind: 'timeout' | 'rate_limited' | 'unsupported' | 'http' | 'generic';
+  kind: 'timeout' | 'rate_limited' | 'unsupported' | 'http' | 'blocked' | 'generic';
   message: string;
   timeoutMs?: number;
   retryAfterMs?: number;
@@ -127,6 +133,9 @@ function toRecordedError(error: unknown): RecordedError {
   if (error instanceof UnsupportedError) {
     return { kind: 'unsupported', message: error.message };
   }
+  if (error instanceof BlockedHostError) {
+    return { kind: 'blocked', message: error.message };
+  }
   if (error instanceof HttpError) {
     return { kind: 'http', message: error.message, statusCode: error.statusCode };
   }
@@ -145,6 +154,8 @@ function reviveError(recorded: RecordedError, url: string): Error {
       return new RateLimitedError(recorded.message, recorded.retryAfterMs);
     case 'unsupported':
       return new UnsupportedError(recorded.message);
+    case 'blocked':
+      return new BlockedHostError(recorded.message);
     case 'http':
       return new HttpError(recorded.statusCode ?? 500, recorded.url ?? url);
     default:

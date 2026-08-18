@@ -7,6 +7,10 @@ import { HttpError, RateLimitedError } from '@/lib/errors';
  * The recorder exists so that an expensive collection run survives a change to the collectors. These
  * tests pin the two properties that makes true: a replayed run touches the network zero times, and what
  * it hands the parsers is indistinguishable from what they saw during collection, failures included.
+ *
+ * The hosts are under `.example.com` rather than the shorter `.example` because `lib/fetch.ts` refuses
+ * to request a reserved suffix, and RFC 2606 makes `.example` one. A fixture named for a host the
+ * transport will not dial tests the guard rather than the recorder.
  */
 
 const originalFetch = globalThis.fetch;
@@ -29,12 +33,12 @@ describe('response recording', () => {
   it('replays a recorded body without touching the network', async () => {
     const network = stubFetch(() => new Response('{"Status":0}', { status: 200 }));
 
-    const recorded = await withHttpRecording(() => fetchJson<{ Status: number }>('https://dns.example/resolve?name=a'));
+    const recorded = await withHttpRecording(() => fetchJson<{ Status: number }>('https://dns.example.com/resolve?name=a'));
     expect(recorded.value.Status).toBe(0);
     expect(network.calls()).toBe(1);
 
     const replayed = await withHttpReplay([recorded.transcript], () =>
-      fetchJson<{ Status: number }>('https://dns.example/resolve?name=a'),
+      fetchJson<{ Status: number }>('https://dns.example.com/resolve?name=a'),
     );
     expect(replayed.value.Status).toBe(0);
     expect(replayed.misses).toEqual([]);
@@ -44,7 +48,7 @@ describe('response recording', () => {
   it('stores the body unparsed, so a parser change can read a field the original run ignored', async () => {
     stubFetch(() => new Response('{"kept":1,"ignored":"still here"}', { status: 200 }));
 
-    const { transcript } = await withHttpRecording(() => fetchText('https://api.example/thing'));
+    const { transcript } = await withHttpRecording(() => fetchText('https://api.example.com/thing'));
 
     expect(transcript.exchanges).toHaveLength(1);
     expect(transcript.exchanges[0].body).toBe('{"kept":1,"ignored":"still here"}');
@@ -54,7 +58,7 @@ describe('response recording', () => {
     stubFetch(() => new Response('nope', { status: 503 }));
 
     const recorded = await withHttpRecording(async () => {
-      await expect(fetchText('https://api.example/down')).rejects.toBeInstanceOf(HttpError);
+      await expect(fetchText('https://api.example.com/down')).rejects.toBeInstanceOf(HttpError);
     });
 
     globalThis.fetch = (() => {
@@ -62,7 +66,7 @@ describe('response recording', () => {
     }) as unknown as typeof fetch;
 
     await withHttpReplay([recorded.transcript], async () => {
-      await expect(fetchText('https://api.example/down')).rejects.toBeInstanceOf(HttpError);
+      await expect(fetchText('https://api.example.com/down')).rejects.toBeInstanceOf(HttpError);
     });
   });
 
@@ -70,7 +74,7 @@ describe('response recording', () => {
     stubFetch(() => new Response('slow down', { status: 429 }));
 
     const recorded = await withHttpRecording(async () => {
-      await expect(fetchText('https://api.example/limited')).rejects.toBeInstanceOf(RateLimitedError);
+      await expect(fetchText('https://api.example.com/limited')).rejects.toBeInstanceOf(RateLimitedError);
     });
 
     globalThis.fetch = (() => {
@@ -78,7 +82,7 @@ describe('response recording', () => {
     }) as unknown as typeof fetch;
 
     await withHttpReplay([recorded.transcript], async () => {
-      await expect(fetchText('https://api.example/limited')).rejects.toBeInstanceOf(RateLimitedError);
+      await expect(fetchText('https://api.example.com/limited')).rejects.toBeInstanceOf(RateLimitedError);
     });
   });
 
@@ -91,8 +95,8 @@ describe('response recording', () => {
         }),
     );
 
-    const recorded = await withHttpRecording(() => probe('https://site.example/'));
-    const replayed = await withHttpReplay([recorded.transcript], () => probe('https://site.example/'));
+    const recorded = await withHttpRecording(() => probe('https://site.example.com/'));
+    const replayed = await withHttpReplay([recorded.transcript], () => probe('https://site.example.com/'));
 
     expect(replayed.value.status).toBe(recorded.value.status);
     expect(replayed.value.body).toBe('<title>Hello</title>');
@@ -103,17 +107,17 @@ describe('response recording', () => {
     const { transcript } = await withHttpRecording(async () => undefined);
 
     const replayed = await withHttpReplay([transcript], async () => {
-      await expect(fetchText('https://api.example/new-endpoint')).rejects.toBeInstanceOf(TranscriptMissError);
+      await expect(fetchText('https://api.example.com/new-endpoint')).rejects.toBeInstanceOf(TranscriptMissError);
     });
 
     expect(replayed.misses).toHaveLength(1);
-    expect(replayed.misses[0]).toContain('https://api.example/new-endpoint');
+    expect(replayed.misses[0]).toContain('https://api.example.com/new-endpoint');
   });
 
   it('leaves the request path alone when nothing is recording', async () => {
     const network = stubFetch(() => new Response('live', { status: 200 }));
 
-    expect(await fetchText('https://api.example/live')).toBe('live');
+    expect(await fetchText('https://api.example.com/live')).toBe('live');
     expect(network.calls()).toBe(1);
   });
 });
