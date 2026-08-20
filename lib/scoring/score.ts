@@ -263,6 +263,7 @@ function deriveFlags(
   if (facts.signup?.class === 'free_routing' || (facts.signup?.wildcardMx?.hosts.length ?? 0) > 0) {
     flags.add('catch_all_capable');
   }
+  if (facts.signup?.class === 'ambiguous_routing') flags.add('catch_all_capable');
   if (facts.dns && facts.dns.mx.length === 0) flags.add('no_mx');
   if (age !== null && age < 30) flags.add('too_new');
   if (facts.meta.providerSuffix) flags.add('provider_subdomain');

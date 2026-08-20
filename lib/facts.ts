@@ -133,6 +133,7 @@ export type MailFacts = {
 export type SignupClass =
   | 'temp_mail'
   | 'free_routing'
+  | 'ambiguous_routing'
   | 'forwarder'
   | 'paid_tenant'
   | 'consumer_infrastructure'
@@ -140,12 +141,19 @@ export type SignupClass =
   | 'unknown_host'
   | 'none';
 
+export type SignupMatchVia = 'mx' | 'cname' | 'address' | 'spf' | 'ns';
+
 export type SignupFacts = {
   /** The dominant classification of this domain's mail configuration. */
   class: SignupClass;
   provider?: string;
   /** The MX hostname that produced the classification. */
   matchedHost?: string;
+  /**
+   * How the provider was identified. `mx` is a hostname the exchanger itself named; the rest are
+   * the custom-domain disguise, where the exchanger names only this zone.
+   */
+  matchedVia?: SignupMatchVia;
   /**
    * Corroboration for the free-routing fingerprint.
    *

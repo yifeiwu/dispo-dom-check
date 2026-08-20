@@ -159,7 +159,10 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
       'This uses absence without breaking the rule that missing DMARC is never penalised alone. The signal is the pairing: someone who configured unlimited inbound aliasing but invested nothing in being able to send is set up to receive verification messages and nothing else.',
     requires: [],
     applies(facts, fired) {
-      const aliasing = fired.has('signup.free_routing') || fired.has('signup.forwarder');
+      const aliasing =
+        fired.has('signup.free_routing') ||
+        fired.has('signup.forwarder') ||
+        fired.has('signup.ambiguous_routing');
       const noOutbound =
         !facts.mail?.spf && (facts.mail?.dkimSelectors.length ?? 0) === 0 && !facts.mail?.dmarcPolicy;
       return aliasing && noOutbound;

@@ -1,6 +1,6 @@
 # Scoring model
 
-Model version: `1.4.0`
+Model version: `1.7.0`
 
 This document is the reasoning, not the numbers. The implementation lives in
 [`lib/scoring/weights.ts`](../lib/scoring/weights.ts), which is the single place any weight,
@@ -853,6 +853,36 @@ decide. The audit prints such cases as `KEEP bands disagree` rather than hiding 
 number was consulted first, and three signals currently carry that tier.
 
 ## Changelog
+
+### 1.7.0
+
+Closed three holes in custom-domain disposable detection without fitting anything to the holdout.
+
+The in-zone MX lookup already asked the resolver for an A record and threw away the CNAME chain that
+came back with it. An exchanger named `mx.theirdomain.com` that CNAMEs onto `in.mailsac.com` therefore
+read as self-hosted. The chain is kept, matched against the hostname tables that already exist, and
+classified as the provider the CNAME names — still one lookup, still gated on an in-zone exchanger.
+
+Two more fingerprints ride along in records the analysis already fetches: SPF includes those services
+publish for custom domains (`include:relays.mailsac.com`), and apex TXT ownership tokens (`mailsac_`
+alongside the TempMail.lol prefix that shipped in `1.5.0`). A nameserver table is wired the same way
+and empty, because no provider currently documents a required nameserver in its public setup.
+
+The mechanism test for all of that lives in `benchmark-disposable/` and `test/signup-collect.test.ts`,
+outside `benchmark/abuse.csv`, on the same pattern as `benchmark-bimi/`.
+
+Zoho Mail left `signup.free_routing`. Its free catch-all product and its paid mailbox share exchangers,
+which the table already noted, and that class is where the remaining false positives concentrate. It is
+now `signup.ambiguous_routing` at −8, and it does not fire the young-and-siteless conjunction. ImprovMX
+and Forward Email gained the SPF-include corroboration Cloudflare already had. GoDaddy was considered
+for registrar-defaults and declined: `smtp.secureserver.net` is also paid Professional Email.
+
+Parking detection gained language-independent asset paths (Sedo, ParkingCrew, Namecheap, HugeDomains,
+Afternic, GoDaddy for-sale) so a localised parking page is not missed for want of an English slogan.
+
+`npm run checkmail:subsample` draws a stratified ~180-domain sample over the `DISPOSABLE` rows and the
+free-routing legitimate false positives, so the metered reputation source can be measured without
+spending the month on the holdout. It does not run during collection.
 
 ### 1.6.0
 

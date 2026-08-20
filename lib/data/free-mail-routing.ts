@@ -12,8 +12,10 @@ import type { MxFingerprint } from './mx-match';
  * legitimately. The decisive weight lives in the combination with youth and the absence of a website,
  * where the hobbyist explanation no longer holds.
  *
- * The weakest members are the providers whose free and paid tiers share mail exchangers, since the two
- * cannot be told apart from DNS alone.
+ * Providers whose free and paid tiers share mail exchangers do not belong here. Scoring them as
+ * unlimited free routing is what produced most of the remaining false positives, and leaving them
+ * unmatched would drop real farm domains that use the free tier. They live in `AMBIGUOUS_MAIL_MX`,
+ * a weaker class that does not fire the young-and-siteless conjunction.
  */
 export const FREE_MAIL_ROUTING_MX: readonly MxFingerprint[] = [
   {
@@ -30,15 +32,28 @@ export const FREE_MAIL_ROUTING_MX: readonly MxFingerprint[] = [
   },
   { provider: 'ImprovMX', patterns: ['improvmx.com'], note: 'free tier forwards any domain' },
   { provider: 'ForwardEmail', patterns: ['forwardemail.net'], note: 'free tier forwards any domain' },
+  { provider: 'Migadu', patterns: ['migadu.com'] },
+  { provider: 'Yandex Mail for Domain', patterns: ['mx.yandex.net', 'yandex.net', 'yandex.ru'] },
+  { provider: 'Purelymail', patterns: ['purelymail.com'] },
+  { provider: 'Mailfence', patterns: ['mailfence.com'] },
+];
+
+/**
+ * Mail exchangers that a free unlimited-alias product and a paid mailbox product share, so DNS cannot
+ * tell which the domain is on.
+ *
+ * Zoho sat in `FREE_MAIL_ROUTING_MX` until that table's own membership test was applied to it: the
+ * note it already carried said the tiers are indistinguishable, and the holdout's remaining
+ * false positives concentrate on free-routing matches. A paid Zoho Mail tenant is a small business,
+ * which is the expensive error; a free Zoho custom domain is still catch-all capable, which is why
+ * this is a weaker class rather than unmatched.
+ */
+export const AMBIGUOUS_MAIL_MX: readonly MxFingerprint[] = [
   {
     provider: 'Zoho Mail',
     patterns: ['zoho.com', 'zoho.eu', 'zohomail.com'],
     note: 'free and paid tiers share mail exchangers and cannot be distinguished from DNS',
   },
-  { provider: 'Migadu', patterns: ['migadu.com'] },
-  { provider: 'Yandex Mail for Domain', patterns: ['mx.yandex.net', 'yandex.net', 'yandex.ru'] },
-  { provider: 'Purelymail', patterns: ['purelymail.com'] },
-  { provider: 'Mailfence', patterns: ['mailfence.com'] },
 ];
 
 /*
@@ -55,16 +70,27 @@ export const FREE_MAIL_ROUTING_MX: readonly MxFingerprint[] = [
  */
 
 /**
- * Corroboration for the free-routing fingerprint that dominates this class, verified during design.
- * Held as data so the collector can confirm the match two further ways when the MX hostname alone is
- * ambiguous: every routing target resolves inside one small prefix, and the provider publishes a
- * well-known SPF include.
+ * Corroboration for a free-routing fingerprint, held as data so the collector can confirm a match
+ * when the MX hostname alone is easy to spoof. Every entry comes from the provider's own setup
+ * instructions. A prefix is listed only where the provider publishes a dedicated routing range;
+ * an SPF include is enough on its own, and a check the network cuts short is silence rather than
+ * disagreement.
  */
-export const CLOUDFLARE_ROUTING = {
-  mxSuffix: '.mx.cloudflare.net',
-  targetPrefix: '162.159.205.',
-  spfInclude: '_spf.mx.cloudflare.net',
-} as const;
+export type RoutingCorroboration = {
+  mxSuffix: string;
+  spfInclude: string;
+  targetPrefix?: string;
+};
+
+export const ROUTING_CORROBORATION: readonly RoutingCorroboration[] = [
+  {
+    mxSuffix: '.mx.cloudflare.net',
+    targetPrefix: '162.159.205.',
+    spfInclude: '_spf.mx.cloudflare.net',
+  },
+  { mxSuffix: 'improvmx.com', spfInclude: 'spf.improvmx.com' },
+  { mxSuffix: 'forwardemail.net', spfInclude: 'spf.forwardemail.net' },
+];
 
 /**
  * Paid mail tenancy: a positive signal, because someone is paying per seat for this domain's mail.

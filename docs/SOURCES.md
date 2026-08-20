@@ -152,6 +152,9 @@ lookup would parse as a registry that publishes nothing.
   the domain's own zone** — the shape the throwaway-inbox services instruct their custom-domain users to
   configure. It is deliberately not extended to every unrecognised exchanger, which would spend a round
   trip on a large share of ordinary domains to ask a question their hostname has already answered.
+  From `1.7.0` the CNAME chain that lookup already returns is kept and matched against the hostname
+  tables, so `mx.theirdomain.com CNAME in.mailsac.com` classifies as the provider rather than as
+  self-hosted. Still one query.
 - The net effect on the fan-out is **+2 queries for any domain with mail, and +3 for the minority whose
   mail exchanger names its own zone**. That is the first increase since `1.3.0` cut a third of the DNS
   work, and it is recorded here rather than absorbed quietly: the standing rule is that a query is paid
@@ -319,12 +322,14 @@ feed fetched per request. Verified classes:
 
 | Class | Fingerprint approach |
 | --- | --- |
-| Free custom-domain routing | Matched on mail-exchanger hostname suffix, because the routing names are per-account and versioned under a stable parent. The dominant provider in this class is corroborated two further ways: every routing target resolves inside one small IPv4 prefix, and the provider publishes a well-known SPF include. |
+| Free custom-domain routing | Matched on mail-exchanger hostname suffix, because the routing names are per-account and versioned under a stable parent. A match is corroborated from the provider's published SPF include and, where it publishes one, a dedicated routing prefix. |
 | Registrar free forwarding | Bundled free with any domain at the registrar and catch-all capable. Its paid mailbox product resolves elsewhere and is the opposite signal. |
-| Free tiers of hosted mail | Several providers accept any custom domain on a free plan. Where a provider's free and paid tiers share mail exchangers they cannot be separated from DNS, which is noted in the table. |
-| Temp-mail | Throwaway-inbox operators self-brand their mail exchangers, and keep the same ones as they rotate front-end domains. |
+| Free tiers of hosted mail | Several providers accept any custom domain on a free plan. Where a provider's free and paid tiers share mail exchangers they cannot be separated from DNS, they are `AMBIGUOUS_MAIL_MX` rather than this class. |
+| Temp-mail | Throwaway-inbox operators self-brand their mail exchangers, and keep the same ones as they rotate front-end domains. An in-zone exchanger that CNAMEs onto one of those hostnames is the same match, reached from the A lookup already made for the endpoint table. |
 | Temp-mail endpoints | The IPv4 addresses those services publish in their own custom-domain setup instructions, matched only where the mail exchanger sits inside the domain's own zone and so names nothing useful. This is adjacent to the hosting reputation rejected below, and the distinction is that it matches a specific documented mail endpoint rather than judging an ASN or a prefix; the precedent is the routing-prefix corroboration that has shipped since `1.0.0`. Entries come from provider documentation only — fitting them to the labelled holdout would make every figure that holdout then produced circular. An endpoint that moves silently stops matching and costs nothing. |
+| Temp-mail SPF includes | The `include:` those services tell a custom-domain customer to publish, read out of the apex TXT set already fetched. Same documentation-only rule as the endpoint table. |
 | Temp-mail ownership tokens | The apex TXT tokens those services ask a customer to publish to prove control of a domain. Read out of a record already fetched, so it costs no query. Restricted to apex-visible tokens: a provider that puts its token at a dedicated subdomain would cost a lookup on every analysis to find a record almost no domain has. |
+| Ambiguous free-or-paid mail | Providers whose free catch-all custom-domain product and paid mailbox share exchangers. Matched on hostname like the tables above, scored as a weaker class that does not fire the young-and-siteless conjunction. |
 | Alias forwarders | Unmistakable per-provider mail exchangers. The boundary against the temp-mail table above is whether the inbox expires: an alias that lives until its owner deletes it, forwarding to a mailbox they already had, is this class and not that one, which matters because that table is consulted first and at more than three times the weight. |
 | Shared relay domains | Matched on the submitted domain, since relay users receive mail at the provider's domain and never point their own MX. |
 | Paid mail tenancy | Business suites, enterprise mail gateways and the paid-only privacy hosts, used as a weak positive. Membership turns on the bill scaling with the mailbox, which is what makes a match evidence of spend on this domain rather than of a subscription the operator already held. |

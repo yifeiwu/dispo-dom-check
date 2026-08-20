@@ -56,7 +56,7 @@ export type ScoringConfig = Omit<DeepWiden<typeof DEFAULT_CONFIG>, 'verdictBands
 };
 
 export const DEFAULT_CONFIG = {
-  modelVersion: '1.6.0',
+  modelVersion: '1.7.0',
 
   /** Additive evidence starts from a neutral midpoint rather than from zero or from full trust. */
   neutralBase: 50,
@@ -124,6 +124,17 @@ export const DEFAULT_CONFIG = {
      * alone would have suggested, which was to halve it.
      */
     freeRouting: -21,
+    /**
+     * Mail exchangers a free unlimited-alias product and a paid mailbox product share.
+     *
+     * Placed by judgement rather than a sweep: Zoho was in `freeRouting` until the table's own
+     * membership test was applied, and putting it back there would re-concentrate false positives
+     * on paying small businesses. It is above unmatched (which would drop the free-tier farms) and
+     * well below `freeRouting`, and it does not participate in the young-and-siteless conjunction
+     * that does most of that class's work. A later holdout that can tell the tiers apart should
+     * retune this, not the other way around.
+     */
+    ambiguousRouting: -8,
     forwarder: -12,
     paidTenant: 6,
     /**

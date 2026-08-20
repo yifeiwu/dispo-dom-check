@@ -44,6 +44,11 @@ export const TEMP_MAIL_MX: readonly MxFingerprint[] = [
   { provider: 'SmailPro', patterns: ['smailpro.com'] },
   { provider: 'Mailsac', patterns: ['mailsac.com'] },
   { provider: 'MailSlurp', patterns: ['mailslurp.com'] },
+  {
+    provider: 'TempMail.lol',
+    patterns: ['tempmail.lol'],
+    note: 'the service also sells custom domains that hide this hostname; those are reached by the endpoint and token tables',
+  },
   { provider: 'Throwaway Mail', patterns: ['throwawaymail.com'] },
   { provider: 'Tempr', patterns: ['tempr.email', 'discard.email'] },
   { provider: 'Mailcatch', patterns: ['mailcatch.com'] },
@@ -94,6 +99,53 @@ export const TEMP_MAIL_MX_ENDPOINTS: readonly MxEndpoint[] = [
     note: 'the address its custom-domain instructions tell users to publish as `mx`',
   },
 ];
+
+/**
+ * SPF includes those same services tell a custom-domain customer to publish.
+ *
+ * Read out of the apex TXT set the analysis already fetches, so this costs no query. It reaches the
+ * operator who disguised the mail exchanger but still authorised the provider to send — which the
+ * custom-domain setup that wants bounce handling almost always does.
+ *
+ * Same two rules as the endpoint table: provider documentation only, and an include that disappears
+ * stops matching rather than implicating a neighbour.
+ */
+export const TEMP_MAIL_SPF_INCLUDES: readonly { include: string; provider: string }[] = [
+  { include: 'relays.mailsac.com', provider: 'Mailsac' },
+];
+
+/**
+ * Nameservers a throwaway-inbox service requires the customer to delegate to.
+ *
+ * Empty because no provider currently documents a required nameserver in its public custom-domain
+ * setup: they ask for MX, an A record, and a TXT token, and the customer keeps their existing DNS.
+ * The matcher is wired so an entry is one line when one appears; until then the lookup is skipped,
+ * which is the same early-out the endpoint table uses when it has nothing to compare.
+ */
+export const TEMP_MAIL_NS: readonly { pattern: string; provider: string }[] = [];
+
+export function matchTempMailSpf(
+  spfRecord: string | undefined,
+): { provider: string; include: string } | null {
+  if (!spfRecord) return null;
+  const haystack = spfRecord.toLowerCase();
+  for (const { include, provider } of TEMP_MAIL_SPF_INCLUDES) {
+    if (haystack.includes(`include:${include}`)) return { provider, include };
+  }
+  return null;
+}
+
+export function matchTempMailNs(nameservers: readonly string[] | undefined): string | null {
+  if (!nameservers || TEMP_MAIL_NS.length === 0) return null;
+  for (const host of nameservers) {
+    const normalised = host.toLowerCase().replace(/\.$/, '');
+    for (const { pattern, provider } of TEMP_MAIL_NS) {
+      const needle = pattern.toLowerCase();
+      if (normalised === needle || normalised.endsWith(`.${needle}`)) return provider;
+    }
+  }
+  return null;
+}
 
 export function matchEndpoint(address: string): string | null {
   const normalised = address.trim();

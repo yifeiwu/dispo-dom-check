@@ -74,4 +74,17 @@ export const PARKING_BODY_FINGERPRINTS: readonly string[] = [
    * fingerprint in this list that is an English phrase has the same blind spot; an asset path does not.
    */
   'scripts-compressed/parking-page',
+  /*
+   * Language-independent parking bundles. English slogans miss localised pages; these are asset
+   * paths and hostnames the parking operator's own HTML loads, so they survive translation.
+   */
+  'img.sedoparking.com',
+  'sedoparking.com/registrar',
+  'js.parkingcrew.net',
+  'track.parkingcrew.net',
+  'parkingcrew.net/js',
+  'parkingpage.namecheap.com',
+  'static.hugedomains.com',
+  'img.afternic.com',
+  'forsale.godaddy.com',
 ];

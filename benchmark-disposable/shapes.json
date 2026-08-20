@@ -1,0 +1,69 @@
+{
+  "description": "Custom-domain DNS shapes transcribed from provider setup documentation. Not derived from benchmark/abuse.csv. The collector tests in test/signup-collect.test.ts pin each shape.",
+  "shapes": [
+    {
+      "id": "tempmail-lol-inzone-a",
+      "provider": "TempMail.lol",
+      "source": "https://tempmail.lol/en/api (Prepare Custom Domain: A mx → published address, MX → mx.<domain>)",
+      "dns": {
+        "mx": ["mx.example.com"],
+        "a_at_mx": ["46.62.148.222"]
+      },
+      "expect": { "class": "temp_mail", "matchedVia": "address", "provider": "TempMail.lol" }
+    },
+    {
+      "id": "tempmail-lol-apex-token",
+      "provider": "TempMail.lol",
+      "source": "https://tempmail.lol/en/api (TXT tm-custom-domain-verification)",
+      "dns": {
+        "txt": ["tm-custom-domain-verification=example"]
+      },
+      "expect": { "disposableVerification": ["TempMail.lol"] }
+    },
+    {
+      "id": "mailsac-byodomain-mx",
+      "provider": "Mailsac",
+      "source": "https://docs.mailsac.com/en/latest/help/dns_verification/dns_verification.html (MX 1 in.mailsac.com)",
+      "dns": {
+        "mx": ["in.mailsac.com"]
+      },
+      "expect": { "class": "temp_mail", "matchedVia": "mx", "provider": "Mailsac" }
+    },
+    {
+      "id": "mailsac-inzone-cname",
+      "provider": "Mailsac",
+      "source": "https://docs.mailsac.com/en/latest/help/dns_verification/dns_verification.html (MX value in.mailsac.com, applied as a CNAME of an in-zone exchanger)",
+      "dns": {
+        "mx": ["mx.example.com"],
+        "cname_at_mx": "in.mailsac.com"
+      },
+      "expect": { "class": "temp_mail", "matchedVia": "cname", "provider": "Mailsac" }
+    },
+    {
+      "id": "mailsac-apex-token",
+      "provider": "Mailsac",
+      "source": "https://docs.mailsac.com/en/latest/services/custom_domains/custom_domains.html (TXT mailsac_<token>)",
+      "dns": {
+        "txt": ["mailsac_0rlzMqMyDo2wDF6FuE0x54U5"]
+      },
+      "expect": { "disposableVerification": ["Mailsac"] }
+    },
+    {
+      "id": "mailsac-spf-include",
+      "provider": "Mailsac",
+      "source": "https://docs.mailsac.com/en/latest/services/custom_domains/custom_domains.html (v=spf1 include:relays.mailsac.com ~all)",
+      "dns": {
+        "mx": ["mail.example.net"],
+        "spf": "v=spf1 include:relays.mailsac.com ~all"
+      },
+      "expect": { "class": "temp_mail", "matchedVia": "spf", "provider": "Mailsac" }
+    },
+    {
+      "id": "mailsac-zero-setup-suffix",
+      "provider": "Mailsac",
+      "source": "https://docs.mailsac.com/en/latest/services/custom_domains/custom_domains.html (Zero-Setup Subdomain under msdc.co)",
+      "input": "qa.msdc.co",
+      "expect": { "providerSuffix": { "suffix": "msdc.co", "kind": "free_subdomain" } }
+    }
+  ]
+}

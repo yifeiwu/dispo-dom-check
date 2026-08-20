@@ -28,6 +28,7 @@ import {
   verifiedBimiDomain,
   wildcardMxDomain,
   withCheckMail,
+  zohoMailDomain,
 } from './fixtures';
 
 describe('bands', () => {
@@ -614,6 +615,7 @@ describe('explainability', () => {
       farmProfileDomain,
       registrarDefaultFarm,
       forwarderDomain,
+      zohoMailDomain,
       parkedWithMail,
       accreditedInstitution,
       providerSubdomain,
@@ -711,6 +713,19 @@ describe('disposable capability reached without a provider hostname', () => {
     const unprobed = wildcardMxDomain();
     unprobed.signup = { ...unprobed.signup!, wildcardMx: undefined };
     expect(score(unprobed).legitimacy).toBe(score(probedNoWildcardDomain()).legitimacy);
+  });
+});
+
+describe('ambiguous free-or-paid mail routing', () => {
+  it('does not treat Zoho as free unlimited-alias routing', () => {
+    const result = score(zohoMailDomain());
+    expect(result.signals.map((signal) => signal.id)).toContain('signup.ambiguous_routing');
+    expect(result.signals.map((signal) => signal.id)).not.toContain('signup.free_routing');
+    expect(result.combinations.map((combo) => combo.id)).not.toContain('combo.free_routing_young_no_site');
+  });
+
+  it('still surfaces catch-all capability so a consumer can apply their own policy', () => {
+    expect(score(zohoMailDomain()).flags).toContain('catch_all_capable');
   });
 });
 

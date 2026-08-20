@@ -67,6 +67,7 @@ npm run lint                   # eslint
 npm run build                  # production build
 npm run probe -- <domain>...   # readout for one or more domains against a running server
 npm run refresh:pricing        # update the committed suffix price snapshot
+npm run checkmail:subsample    # stratified Check-Mail measurement; no-op without a key
 ```
 
 Two further scripts measure the model against a labelled holdout, read from `benchmark/` as three

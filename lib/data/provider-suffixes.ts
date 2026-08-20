@@ -70,7 +70,12 @@ export const PROVIDER_SUFFIXES: readonly ProviderSuffix[] = [
   { suffix: 'webflow.io', provider: 'Webflow', kind: 'platform' },
   { suffix: 'ngrok.io', provider: 'ngrok tunnel', kind: 'platform' },
   { suffix: 'ngrok-free.app', provider: 'ngrok tunnel', kind: 'free_subdomain' },
-  { suffix: 'trycloudflare.com', provider: 'Cloudflare Tunnel', kind: 'free_subdomain' },
+  {
+    suffix: 'msdc.co',
+    provider: 'Mailsac zero-setup subdomain',
+    kind: 'free_subdomain',
+    note: 'Mailsac issues these under its own suffix with no DNS work from the customer',
+  },
 
   // Free subdomain and dynamic-DNS providers: free to obtain and therefore disposable by construction.
   // Registration economics for these come from this table rather than from the pricing collector, since

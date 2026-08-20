@@ -1,13 +1,20 @@
 import { matchMx } from '../data/mx-match';
-import { TEMP_MAIL_MX, TEMP_MAIL_MX_ENDPOINTS, matchEndpoint } from '../data/temp-mail-mx';
+import {
+  TEMP_MAIL_MX,
+  TEMP_MAIL_MX_ENDPOINTS,
+  matchEndpoint,
+  matchTempMailNs,
+  matchTempMailSpf,
+} from '../data/temp-mail-mx';
 import { FORWARDER_MX } from '../data/forwarder-mx';
 import {
-  CLOUDFLARE_ROUTING,
+  AMBIGUOUS_MAIL_MX,
   CONSUMER_MAIL_INFRASTRUCTURE_MX,
   FREE_MAIL_ROUTING_MX,
   PAID_MAIL_MX,
+  ROUTING_CORROBORATION,
 } from '../data/free-mail-routing';
-import { mxAt, resolveA } from './dns';
+import { mxAt, resolveA, resolveAddress } from './dns';
 import type { DnsFacts, SignupFacts } from '../facts';
 
 /**
@@ -24,8 +31,9 @@ import type { DnsFacts, SignupFacts } from '../facts';
  *
  * Two observations sit beside the classification rather than inside it, because both answer questions
  * the hostname tables are structurally unable to reach. The wildcard probe asks whether *every*
- * subdomain receives mail, and the endpoint lookup asks who is behind a mail exchanger that names only
- * the domain's own zone. See each below.
+ * subdomain receives mail, and the in-zone lookup asks who is behind a mail exchanger that names only
+ * the domain's own zone — including a CNAME onto a known provider, which the hostname tables cannot
+ * see until the resolver's chain is kept. See each below.
  */
 export async function collectSignup(
   domain: string,
@@ -52,35 +60,86 @@ export async function collectSignup(
    */
   const wildcard = probeWildcardMx(domain, Math.min(timeoutMs, 1500));
 
-  const classified = await classify(domain, mxHosts, spfRecord, timeoutMs);
+  const classified = await classify(domain, mxHosts, dns, spfRecord, timeoutMs);
   return { ...classified, wildcardMx: await wildcard };
 }
 
 async function classify(
   domain: string,
   mxHosts: string[],
+  dns: DnsFacts | undefined,
   spfRecord: string | undefined,
   timeoutMs: number,
 ): Promise<SignupFacts> {
+  const fromHostname = classifyMxHosts(mxHosts, spfRecord, timeoutMs);
+  if (fromHostname) return fromHostname;
+
+  // Mail handled inside the domain's own namespace. Common for both a small business running its own
+  // server and a temp-mail operator running one, so it scores neutrally unless the in-zone lookup,
+  // an SPF include or a nameserver fingerprint names a provider.
+  const selfHosted = mxHosts.some((host) => host === domain || host.endsWith(`.${domain}`));
+
+  if (selfHosted) {
+    const inZone = await identifyInZoneMx(mxHosts, spfRecord, timeoutMs);
+    if (inZone) return inZone;
+  }
+
+  const spfMatch = matchTempMailSpf(spfRecord);
+  if (spfMatch) {
+    return {
+      class: 'temp_mail',
+      provider: spfMatch.provider,
+      matchedHost: spfMatch.include,
+      matchedVia: 'spf',
+      selfHosted,
+    };
+  }
+
+  const nsProvider = matchTempMailNs(dns?.ns);
+  if (nsProvider) {
+    const matchedHost = dns?.ns.find((host) => matchTempMailNs([host]) === nsProvider);
+    return {
+      class: 'temp_mail',
+      provider: nsProvider,
+      matchedHost,
+      matchedVia: 'ns',
+      selfHosted,
+    };
+  }
+
+  return {
+    class: selfHosted ? 'self_hosted' : 'unknown_host',
+    matchedHost: mxHosts[0],
+    selfHosted,
+  };
+}
+
+function classifyMxHosts(
+  mxHosts: string[],
+  spfRecord: string | undefined,
+  timeoutMs: number,
+): Promise<SignupFacts> | SignupFacts | undefined {
   const tempMail = matchMx(mxHosts, TEMP_MAIL_MX);
   if (tempMail) {
     return {
       class: 'temp_mail',
       provider: tempMail.fingerprint.provider,
       matchedHost: tempMail.matchedHost,
+      matchedVia: 'mx',
       selfHosted: false,
     };
   }
 
   const freeRouting = matchMx(mxHosts, FREE_MAIL_ROUTING_MX);
   if (freeRouting) {
-    return {
-      class: 'free_routing',
+    return (async () => ({
+      class: 'free_routing' as const,
       provider: freeRouting.fingerprint.provider,
       matchedHost: freeRouting.matchedHost,
+      matchedVia: 'mx' as const,
       corroboration: await corroborateRouting(freeRouting.matchedHost, spfRecord, timeoutMs),
       selfHosted: false,
-    };
+    }))();
   }
 
   const forwarder = matchMx(mxHosts, FORWARDER_MX);
@@ -89,6 +148,7 @@ async function classify(
       class: 'forwarder',
       provider: forwarder.fingerprint.provider,
       matchedHost: forwarder.matchedHost,
+      matchedVia: 'mx',
       selfHosted: false,
     };
   }
@@ -101,6 +161,7 @@ async function classify(
       class: 'consumer_infrastructure',
       provider: consumer.fingerprint.provider,
       matchedHost: consumer.matchedHost,
+      matchedVia: 'mx',
       selfHosted: false,
     };
   }
@@ -111,33 +172,23 @@ async function classify(
       class: 'paid_tenant',
       provider: paid.fingerprint.provider,
       matchedHost: paid.matchedHost,
+      matchedVia: 'mx',
       selfHosted: false,
     };
   }
 
-  // Mail handled inside the domain's own namespace. Common for both a small business running its own
-  // server and a temp-mail operator running one, so it scores neutrally and the surrounding signals
-  // decide.
-  const selfHosted = mxHosts.some((host) => host === domain || host.endsWith(`.${domain}`));
-
-  if (selfHosted) {
-    const endpoint = await identifyInZoneMx(mxHosts, timeoutMs);
-    if (endpoint) {
-      return {
-        class: 'temp_mail',
-        provider: endpoint.provider,
-        matchedHost: endpoint.host,
-        matchedAddress: endpoint.address,
-        selfHosted: true,
-      };
-    }
+  const ambiguous = matchMx(mxHosts, AMBIGUOUS_MAIL_MX);
+  if (ambiguous) {
+    return {
+      class: 'ambiguous_routing',
+      provider: ambiguous.fingerprint.provider,
+      matchedHost: ambiguous.matchedHost,
+      matchedVia: 'mx',
+      selfHosted: false,
+    };
   }
 
-  return {
-    class: selfHosted ? 'self_hosted' : 'unknown_host',
-    matchedHost: mxHosts[0],
-    selfHosted,
-  };
+  return undefined;
 }
 
 /**
@@ -211,11 +262,13 @@ function probeLabel(domain: string, ordinal: number): string {
  * `docs/CALIBRATION.md` records that the temp-mail hostname fingerprint matched none of the 123 rows
  * labelled `DISPOSABLE`, and the reason is structural rather than a short table. The throwaway services
  * that support custom domains tell the user to publish `mx.theirdomain.com` and point it at the
- * provider's address, so the mail exchanger names the customer's zone and reveals nothing. Every such
- * domain is invisible to a table of provider hostnames no matter how long that table grows.
+ * provider, so the mail exchanger names the customer's zone and reveals nothing. Every such domain is
+ * invisible to a table of provider hostnames no matter how long that table grows.
  *
- * The address behind it is not invisible, and it is the thing the operator cannot cheaply vary: one
- * server takes the mail for every domain in the pool.
+ * Two things behind that name are not invisible, and both come from the same A lookup:
+ *
+ * - a CNAME onto a hostname the provider owns, which the hostname tables already know
+ * - an A record at an address the provider publishes in its setup instructions
  *
  * This runs only where the mail exchanger is in-zone, which bounds it to one extra lookup on the
  * population it was built for. It is deliberately not extended to every unrecognised exchanger, which
@@ -230,16 +283,31 @@ function probeLabel(domain: string, ordinal: number): string {
  */
 async function identifyInZoneMx(
   mxHosts: string[],
+  spfRecord: string | undefined,
   timeoutMs: number,
-): Promise<{ provider: string; host: string; address: string } | undefined> {
-  if (TEMP_MAIL_MX_ENDPOINTS.length === 0) return undefined;
-
+): Promise<SignupFacts | undefined> {
   const host = mxHosts[0];
   try {
-    const addresses = await resolveA(host, Math.min(timeoutMs, 1500));
+    const { addresses, cnameTargets } = await resolveAddress(host, Math.min(timeoutMs, 1500));
+    const viaCname = classifyMxHosts(cnameTargets, spfRecord, timeoutMs);
+    if (viaCname) {
+      const classified = await viaCname;
+      return { ...classified, matchedVia: 'cname', selfHosted: true };
+    }
+
+    if (TEMP_MAIL_MX_ENDPOINTS.length === 0) return undefined;
     for (const address of addresses) {
       const provider = matchEndpoint(address);
-      if (provider) return { provider, host, address };
+      if (provider) {
+        return {
+          class: 'temp_mail',
+          provider,
+          matchedHost: host,
+          matchedAddress: address,
+          matchedVia: 'address',
+          selfHosted: true,
+        };
+      }
     }
   } catch {
     // The resolver did not answer. Silence is not evidence, so the domain keeps the neutral in-zone
@@ -249,38 +317,39 @@ async function identifyInZoneMx(
 }
 
 /**
- * Confirms the dominant free-routing fingerprint two further ways, both verified during design: every
- * routing target resolves inside one small IPv4 prefix, and the provider publishes a well-known SPF
- * include. Corroboration exists because this one fingerprint carries more weight than any other, so it
- * should not rest on a hostname suffix alone.
+ * Confirms a free-routing fingerprint the hostname tables matched, using whatever the provider
+ * publishes to check against: an SPF include, a dedicated routing prefix, or both.
  *
  * Returning `undefined` rather than an empty array is the whole point of the signature. An empty array
- * is a finding — both checks ran and neither agreed — whereas a provider with nothing to check against
- * and a check the network cut short are both silence, and the governing rule is that silence never
- * moves the score.
+ * is a finding — every available check ran and none of them agreed — whereas a provider with nothing to
+ * check against and a check the network cut short are both silence, and the governing rule is that
+ * silence never moves the score.
  */
 async function corroborateRouting(
   matchedHost: string,
   spfRecord: string | undefined,
   timeoutMs: number,
 ): Promise<string[] | undefined> {
-  if (!matchedHost.endsWith(CLOUDFLARE_ROUTING.mxSuffix)) return undefined;
+  const recipe = ROUTING_CORROBORATION.find((entry) => matchedHost.endsWith(entry.mxSuffix));
+  if (!recipe) return undefined;
 
   const corroboration: string[] = [];
 
-  if (spfRecord?.includes(CLOUDFLARE_ROUTING.spfInclude)) {
+  if (spfRecord?.includes(recipe.spfInclude)) {
     corroboration.push(`SPF includes the provider's routing sender policy`);
   }
 
-  try {
-    const addresses = await resolveA(matchedHost, Math.min(timeoutMs, 1500));
-    if (addresses.some((address) => address.startsWith(CLOUDFLARE_ROUTING.targetPrefix))) {
-      corroboration.push('Mail exchanger resolves inside the provider\'s dedicated routing prefix');
+  if (recipe.targetPrefix) {
+    try {
+      const addresses = await resolveA(matchedHost, Math.min(timeoutMs, 1500));
+      if (addresses.some((address) => address.startsWith(recipe.targetPrefix!))) {
+        corroboration.push("Mail exchanger resolves inside the provider's dedicated routing prefix");
+      }
+    } catch {
+      // The resolver did not answer, so this check has no result either way. Reporting that as a
+      // disagreement would let a timeout discount a match that nothing actually contradicted.
+      if (corroboration.length === 0) return undefined;
     }
-  } catch {
-    // The resolver did not answer, so this check has no result either way. Reporting that as a
-    // disagreement would let a timeout discount a match that nothing actually contradicted.
-    if (corroboration.length === 0) return undefined;
   }
 
   return corroboration;

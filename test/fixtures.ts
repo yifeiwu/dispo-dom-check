@@ -390,6 +390,25 @@ export const registrarDefaultFarm = (): DomainFacts => {
 };
 
 /**
+ * Zoho Mail, whose free catch-all custom-domain product and paid mailbox share exchangers.
+ *
+ * This is the class `signup.free_routing` used to swallow, and the reason that signal concentrated
+ * false positives on paying small businesses. It must not fire the young-and-siteless conjunction.
+ */
+export const zohoMailDomain = (): DomainFacts => {
+  const profile = farmProfileDomain();
+  profile.dns = { ...profile.dns!, mx: [{ priority: 10, host: 'mx.zoho.com' }] };
+  profile.signup = {
+    class: 'ambiguous_routing',
+    provider: 'Zoho Mail',
+    matchedHost: 'mx.zoho.com',
+    matchedVia: 'mx',
+    selfHosted: false,
+  };
+  return profile;
+};
+
+/**
  * A young domain doing the minimum that can be observed rather than asserted: it resolves, serves a
  * page, receives mail and publishes a bare sending policy.
  *

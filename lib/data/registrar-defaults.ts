@@ -23,11 +23,14 @@ const REGISTRAR_DEFAULTS: readonly RegistrarDefault[] = [
 ];
 
 /*
- * Porkbun was drafted as a second entry and dropped. The detector only runs where the mail already
+ * GoDaddy was drafted as a second entry and dropped. Its default nameservers (`domaincontrol.com`)
+ * are real, but the MX that would have to be the third component — `smtp.secureserver.net` — is also
+ * the exchanger for paid Professional Email. Catch-all exists on that paid product, not as a
+ * bundled-free forwarding service, so the three-way agreement would fire on paying mailbox customers.
+ *
+ * Porkbun was drafted and dropped for a different reason: the detector only runs where the mail already
  * classified as free routing, and that registrar's forwarding does not qualify for the free-routing
- * table, so the entry could never have fired; see the note in `lib/data/free-mail-routing.ts`. The
- * requirement that all three components agree is what makes this table safe, and an entry whose third
- * component is unreachable is not a high-confidence default, it is dead code that reads like coverage.
+ * table, so the entry could never have fired. See the note in `lib/data/free-mail-routing.ts`.
  */
 
 function matchesSuffix(value: string, pattern: string): boolean {

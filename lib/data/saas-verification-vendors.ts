@@ -122,6 +122,11 @@ export function countSaasVendors(txtRecords: readonly string[]): string[] {
  */
 export const DISPOSABLE_VERIFICATION_TXT: readonly { prefix: string; provider: string }[] = [
   { prefix: 'tm-custom-domain-verification', provider: 'TempMail.lol' },
+  {
+    prefix: 'mailsac_',
+    provider: 'Mailsac',
+    // Documented as the apex TXT value on the DNS Setup page, e.g. `mailsac_0rlzMqMyDo2wDF6FuE0x54U5`.
+  },
 ];
 
 /** Disposable-mail providers named by a verification token in the apex TXT set. */

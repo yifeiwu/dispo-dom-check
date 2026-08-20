@@ -177,4 +177,19 @@ describe('site collector on a refused redirect', () => {
     expect(site.redirectTarget?.host).toBe('sedo.com');
     expect(site.parked).toBe(true);
   });
+
+  it('detects a localised parking page from a language-independent asset path', async () => {
+    stubNetwork(
+      () =>
+        new Response(
+          `<html><head><title>近日中に公開</title></head><body><script src="https://img.sedoparking.com/registrar/dopark.js"></script>${'x '.repeat(400)}</body></html>`,
+          { status: 200 },
+        ),
+    );
+
+    const site = await collectSite('example.com', undefined, 2_000);
+
+    expect(site.parked).toBe(true);
+    expect(site.parkingEvidence).toMatch(/parking/i);
+  });
 });

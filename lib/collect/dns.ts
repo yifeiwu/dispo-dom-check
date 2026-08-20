@@ -188,8 +188,24 @@ export async function collectDns(domain: string, timeoutMs: number): Promise<Dns
 
 /** Resolves a hostname to IPv4 addresses, used to corroborate the free-routing fingerprint. */
 export async function resolveA(host: string, timeoutMs: number): Promise<string[]> {
+  const resolved = await resolveAddress(host, timeoutMs);
+  return resolved.addresses;
+}
+
+/**
+ * The A lookup already returns any CNAME chain the resolver followed, and throwing that away is what
+ * made an in-zone mail exchanger pointing at a known provider look self-hosted. Keeping both halves
+ * costs no extra query: `query` already retains CNAME records alongside the requested type.
+ */
+export async function resolveAddress(
+  host: string,
+  timeoutMs: number,
+): Promise<{ addresses: string[]; cnameTargets: string[] }> {
   const result = await query(host, 'A', timeoutMs);
-  return result.answers.filter((r) => r.type === RR.A).map((r) => r.data);
+  return {
+    addresses: result.answers.filter((record) => record.type === RR.A).map((record) => record.data),
+    cnameTargets: cnameTargets(result.answers),
+  };
 }
 
 /**

@@ -129,9 +129,20 @@ export const SIGNALS: readonly SignalDefinition[] = [
       // The address route has a signal of its own below, so that the audit can measure the two
       // independently and so that one domain is not charged the same claim twice.
       if (facts.signup.matchedAddress) return null;
+      const via = facts.signup.matchedVia;
+      const host = facts.signup.matchedHost;
+      const provider = facts.signup.provider;
+      const evidence =
+        via === 'cname'
+          ? `Mail exchanger ${host} is a CNAME onto a host belonging to ${provider}`
+          : via === 'spf'
+            ? `SPF includes ${host}, which ${provider} publishes for custom domains`
+            : via === 'ns'
+              ? `Nameservers include ${host}, which ${provider} publishes for custom domains`
+              : `Mail exchanger ${host} belongs to ${provider}`;
       return {
         points: cfg.signup.tempMail,
-        evidence: `Mail exchanger ${facts.signup.matchedHost} belongs to ${facts.signup.provider}`,
+        evidence,
         sourceUrl: sourceUrlFor(facts, 'dns'),
       };
     },
@@ -237,6 +248,22 @@ export const SIGNALS: readonly SignalDefinition[] = [
       return {
         points: cfg.signup.freeRouting,
         evidence: `Mail routed through ${facts.signup.provider} via ${facts.signup.matchedHost}${corroboration}`,
+        sourceUrl: sourceUrlFor(facts, 'dns'),
+      };
+    },
+  },
+  {
+    id: 'signup.ambiguous_routing',
+    dimension: 'signup',
+    label: 'Mail hosted where a free unlimited-alias product and a paid mailbox share exchangers',
+    rationale:
+      'Some providers put their free catch-all custom-domain product and their paid per-seat mailbox on the same mail exchangers, so DNS cannot tell which the domain is on. Treating that as free unlimited-alias routing concentrates false positives on paying small businesses; treating it as unmatched drops the free-tier farms. This is the remaining class: a modest penalty for a real capability that cannot be confirmed as free, and it does not fire the young-and-siteless conjunction that does most of free-routing\'s work.',
+    weight: (cfg) => fixed(cfg.signup.ambiguousRouting),
+    evaluate(facts, cfg) {
+      if (facts.signup?.class !== 'ambiguous_routing') return null;
+      return {
+        points: cfg.signup.ambiguousRouting,
+        evidence: `Mail exchanger ${facts.signup.matchedHost} belongs to ${facts.signup.provider}, whose free and paid tiers cannot be distinguished from DNS`,
         sourceUrl: sourceUrlFor(facts, 'dns'),
       };
     },

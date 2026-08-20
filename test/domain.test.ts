@@ -132,6 +132,14 @@ describe('normaliseInput', () => {
     expect(result.providerSuffix?.kind).toBe('platform');
   });
 
+  it('recognises a Mailsac zero-setup subdomain as a free-subdomain provider', () => {
+    const result = normaliseInput('qa.msdc.co');
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.providerSuffix?.suffix).toBe('msdc.co');
+    expect(result.providerSuffix?.kind).toBe('free_subdomain');
+  });
+
   it('recognises a free-subdomain provider, whose economics differ from a platform', () => {
     const result = normaliseInput('thing.duckdns.org');
     expect(result.kind).toBe('ok');
