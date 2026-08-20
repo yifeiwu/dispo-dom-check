@@ -601,7 +601,8 @@ describe('explainability', () => {
   it('produces a narrative naming the drivers and what was missing', () => {
     const result = score(establishedSmallBusiness());
     expect(result.narrative.length).toBeGreaterThan(40);
-    expect(result.narrative).toContain(String(result.legitimacy));
+    // The gauge owns the number and the band name; the narrative starts with the drivers.
+    expect(result.narrative).not.toContain('out of 100');
   });
 
   /**

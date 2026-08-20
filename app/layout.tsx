@@ -46,10 +46,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </main>
 
           <footer className="border-t border-edge pt-5 text-sm leading-relaxed text-ink-faint">
-            Almost every signal comes from the domain&rsquo;s own registration, DNS, pricing and content,
-            alongside one optional reputation lookup. This tells you a domain is structurally risky far
-            better than it tells you a domain is known bad. Combine it with your own blocklist rather
-            than replacing one.
+            This tells you a domain is structurally risky far better than it tells you a domain is
+            known bad. Combine it with your own blocklist rather than replacing one.
           </footer>
         </div>
       </body>

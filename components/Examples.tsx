@@ -29,11 +29,6 @@ export function Examples({ onPick }: { onPick: (domain: string) => void }) {
           </li>
         ))}
       </ul>
-      <p className="max-w-2xl text-sm leading-relaxed text-ink-faint">
-        All three are real, functioning businesses. The model is not asking whether a domain is
-        malicious, but whether it can mint unlimited deliverable addresses cheaply, so the interesting
-        part is which dimension each one loses points on.
-      </p>
     </section>
   );
 }

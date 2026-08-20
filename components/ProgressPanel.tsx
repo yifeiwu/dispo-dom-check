@@ -13,24 +13,19 @@ export function ProgressPanel({
 }) {
   return (
     <section className="space-y-3 rounded-xl border border-edge bg-surface-raised p-5">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm text-ink-muted">
-          Sources that do not answer in time are reported rather than waited on.
-        </p>
-        <span className="flex shrink-0 items-baseline gap-3">
-          <Elapsed />
-          {/*
-            An analysis can legitimately run for the better part of a minute, so a reader who
-            mistyped needs a way out that is not waiting for a domain they no longer care about.
-          */}
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-md border border-edge-strong px-2.5 py-1 text-xs font-medium text-ink-muted transition-colors hover:text-ink"
-          >
-            Cancel
-          </button>
-        </span>
+      <div className="flex flex-wrap items-baseline justify-end gap-3">
+        <Elapsed />
+        {/*
+          An analysis can legitimately run for the better part of a minute, so a reader who
+          mistyped needs a way out that is not waiting for a domain they no longer care about.
+        */}
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-edge-strong px-2.5 py-1 text-xs font-medium text-ink-muted transition-colors hover:text-ink"
+        >
+          Cancel
+        </button>
       </div>
       <SourceProgress settled={settled} />
     </section>

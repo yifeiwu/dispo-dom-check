@@ -1,14 +1,14 @@
 import type { SourceId } from '../collector';
 import type { DomainFacts, SourceStatus } from '../facts';
 import type { ScoreResult } from './score';
-import { VERDICT_LABELS } from './verdict';
 
 /**
  * The plain-language summary, generated from the strongest contributors rather than written by hand.
  *
  * Generating it means it cannot drift from the score, and it gives a reader who will not expand the
  * signal table the one or two facts that actually drove the verdict, plus an honest statement of what
- * was missing.
+ * was missing. The gauge already owns the number and the band name, so this starts with the drivers
+ * rather than restating them.
  */
 export function narrate(result: ScoreResult, facts: DomainFacts): string {
   const sentences: string[] = [];
@@ -27,24 +27,16 @@ export function narrate(result: ScoreResult, facts: DomainFacts): string {
   const negatives = drivers.filter((signal) => signal.points < 0);
   const positives = drivers.filter((signal) => signal.points > 0);
 
-  const headline = VERDICT_LABELS[result.verdict];
-
-  if (result.verdict === 'insufficient_evidence') {
+  if (negatives.length > 0 && positives.length > 0) {
     sentences.push(
-      `${headline}: not enough sources answered to reach a verdict, so no score is being asserted.`,
-    );
-  } else if (negatives.length > 0 && positives.length > 0) {
-    sentences.push(
-      `${headline}, at ${result.legitimacy} out of 100. ${cap(joinPhrases(negatives.map(phrase)))}, though ${joinPhrases(positives.map(phrase))}.`,
+      `${cap(joinPhrases(negatives.map(phrase)))}, though ${joinPhrases(positives.map(phrase))}.`,
     );
   } else if (negatives.length > 0) {
-    sentences.push(`${headline}, at ${result.legitimacy} out of 100. ${cap(joinPhrases(negatives.map(phrase)))}.`);
+    sentences.push(`${cap(joinPhrases(negatives.map(phrase)))}.`);
   } else if (positives.length > 0) {
-    sentences.push(`${headline}, at ${result.legitimacy} out of 100. ${cap(joinPhrases(positives.map(phrase)))}.`);
-  } else {
-    sentences.push(
-      `${headline}, at ${result.legitimacy} out of 100. Nothing notable fired in either direction.`,
-    );
+    sentences.push(`${cap(joinPhrases(positives.map(phrase)))}.`);
+  } else if (result.verdict !== 'insufficient_evidence') {
+    sentences.push('Nothing notable fired in either direction.');
   }
 
   // Conjunctions deserve their own sentence, because a combination driving the verdict is exactly the

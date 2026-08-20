@@ -331,9 +331,7 @@ export function SignalRows({
         <section>
           <h3 className="mb-1 text-sm font-semibold">Combinations</h3>
           <p className="mb-2 text-sm text-ink-muted">
-            Where the whole differs from the sum of the parts, in both directions: conjunctions that
-            eliminate an innocent explanation, and discounts that stop one underlying fact being charged
-            twice.
+            Where the whole differs from the sum of the parts.
           </p>
           <ul className="rounded-lg border border-edge bg-surface-raised px-4">
             {combinations.map((combination) => (
@@ -376,7 +374,7 @@ export function SignalRows({
         <Collapsible
           summary={(open) =>
             `${open ? 'Hide' : 'Show'} ${unscored.length} ${unscored.length === 1 ? 'finding' : 'findings'} that did not move the score`}
-          description="Each of these was observed and charged nothing. Some are heuristics that measured something and came out neutral; those tagged “never scored” are facts the model reports but deliberately never prices. Most of them the domain asserts about itself with nothing to corroborate it, and the rest were measured against the holdout and found not to tell the two classes apart. Each rationale says which."
+          description="Observed and charged nothing. Open to see why."
         >
           <ul className="mt-3 rounded-lg border border-dashed border-edge px-4">
             {unscored.map((entry) => (
@@ -417,7 +415,7 @@ export function SignalRows({
         <Collapsible
           summary={(open) =>
             `${open ? 'Hide' : 'Show'} what ${terms.length} ${terms.length === 1 ? 'term' : 'terms'} above ${terms.length === 1 ? 'means' : 'mean'}`}
-          description="The evidence has to name the records it read, and those have acronyms. Only the ones this domain's findings actually used are listed."
+          description="Acronyms used in this domain's findings."
         >
           <dl className="mt-3 space-y-3 rounded-lg border border-dashed border-edge p-4">
             {terms.map((entry) => (

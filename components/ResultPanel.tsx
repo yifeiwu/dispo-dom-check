@@ -4,7 +4,7 @@ import { DimensionBars } from '@/components/DimensionBars';
 import { ScoreGauge } from '@/components/ScoreGauge';
 import { SignalRows } from '@/components/SignalRows';
 import { SourcePanel } from '@/components/SourcePanel';
-import { FLAG_LABELS, type AnalyzeResponse, type OutOfScopeResponse } from '@/lib/api-types';
+import type { AnalyzeResponse, OutOfScopeResponse } from '@/lib/api-types';
 import { formatAge, formatDate } from '@/lib/format';
 
 /**
@@ -55,9 +55,7 @@ export function ResultPanel({
       <section className="space-y-5 rounded-xl border border-edge bg-surface-raised p-5">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="font-mono text-base">{result.domain}</h2>
-          <span className="text-xs text-ink-faint">
-            {result.elapsedMs} ms · model {result.modelVersion}
-          </span>
+          <span className="text-xs text-ink-faint">{result.elapsedMs} ms</span>
         </div>
 
         {/*
@@ -100,31 +98,9 @@ export function ResultPanel({
 
         {/* Held to a readable measure: the card runs the full width of the page on a large screen,
             and prose set across all of it is tiring to read. Set a step above the surrounding
-            chrome, because these two paragraphs are the part of the page anyone actually reads
-            through rather than scans. */}
+            chrome, because this is the part of the page anyone actually reads through rather than
+            scans. */}
         <p className="max-w-prose text-base leading-relaxed">{result.narrative}</p>
-        <p className="max-w-prose text-base leading-relaxed text-ink-muted">
-          {result.verdictDescription}
-        </p>
-
-        {result.flags.length > 0 ? (
-          <ul className="flex flex-wrap gap-2">
-            {result.flags.map((flag) => (
-              <li
-                key={flag}
-                className="rounded-full border border-edge px-2.5 py-1 text-xs text-ink-muted"
-              >
-                {FLAG_LABELS[flag] ?? flag}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        {result.inputWasEmailAddress ? (
-          <p className="text-sm text-ink-faint">
-            An address was submitted. Only {result.domain} was analysed.
-          </p>
-        ) : null}
       </section>
 
       <SignalRows
@@ -137,10 +113,6 @@ export function ResultPanel({
 
       <section className="space-y-2">
         <h3 className="text-sm font-semibold">Sources</h3>
-        <p className="text-sm text-ink-muted">
-          Missing data can never make a domain look worse. A source that fails lowers confidence and
-          contributes nothing to the score.
-        </p>
         <SourcePanel sources={result.sources} />
       </section>
     </div>

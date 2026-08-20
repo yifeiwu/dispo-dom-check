@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { score } from '@/lib/scoring/score';
+import { VERDICT_LABELS } from '@/lib/scoring/verdict';
 import { establishedSmallBusiness, nothingObserved, providerSubdomain } from './fixtures';
 
 /**
@@ -46,5 +47,15 @@ describe('narrative', () => {
     expect(narrative).toContain('the registration record');
     expect(narrative).toContain('did not answer');
     expect(narrative).not.toMatch(/do(es)? not apply/);
+  });
+
+  /**
+   * The gauge already shows the band and the number. Restating them as the first clause made every
+   * narrative open with the same sentence the reader had just finished looking at.
+   */
+  it('starts with the drivers rather than restating the score', () => {
+    const result = score(establishedSmallBusiness());
+    expect(result.narrative).not.toContain('out of 100');
+    expect(result.narrative).not.toMatch(new RegExp(`^${VERDICT_LABELS[result.verdict]}`));
   });
 });

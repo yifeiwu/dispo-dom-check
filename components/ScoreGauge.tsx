@@ -54,9 +54,10 @@ export function ScoreGauge({
   const withheld = verdict === 'insufficient_evidence';
 
   /*
-   * A band is a range, and its name alone hides where in that range the domain fell. A 69 and a 55
-   * are both "Probably legitimate"; only one of them is a point away from being called something else,
-   * and that is the thing worth knowing before deciding how much friction a signup deserves.
+   * A band is a range, and its name on the badge hides where in that range the domain fell. A 69 and
+   * a 55 are both "Probably legitimate"; only one of them is a point away from being called something
+   * else. The nearer edge is the fact worth a sentence; the band's name and bounds are already on
+   * the badge and the gauge.
    *
    * Withheld verdicts get none of this: the band they would fall in is exactly the guess the
    * confidence floor exists to refuse.
@@ -130,30 +131,17 @@ export function ScoreGauge({
           {verdictLabel}
         </div>
 
-        {band ? (
+        {band?.nearest ? (
           <p className="mt-2 max-w-xs text-sm leading-relaxed text-ink-muted">
-            <span className="tabular-nums">
-              {verdictLabel} runs {band.min} to {band.max}.
-            </span>
-            {band.nearest ? (
-              <>
-                {' '}
-                <span className="tabular-nums">{band.nearest.distance}</span>{' '}
-                {band.nearest.distance === 1 ? 'point' : 'points'}{' '}
-                {band.nearest.direction === 'below' ? 'lower' : 'higher'} would read{' '}
-                {VERDICT_LABELS[band.nearest.verdict].toLowerCase()}.
-              </>
-            ) : null}
+            <span className="tabular-nums">{band.nearest.distance}</span>{' '}
+            {band.nearest.distance === 1 ? 'point' : 'points'} from{' '}
+            {VERDICT_LABELS[band.nearest.verdict]}
           </p>
         ) : null}
 
-        <dl className="mt-3 flex justify-center gap-6 text-sm sm:justify-start">
+        <dl className="mt-3 text-sm">
           <div>
-            <dt className="text-xs uppercase tracking-wide text-ink-faint">Risk</dt>
-            <dd className="mt-0.5 text-lg font-semibold tabular-nums">{100 - legitimacy}</dd>
-          </div>
-          <div>
-            <dt className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-ink-faint">
+            <dt className="flex items-center justify-center gap-1.5 text-xs uppercase tracking-wide text-ink-faint sm:justify-start">
               <span aria-hidden className="h-0.5 w-3 rounded-full bg-ink-muted" />
               Confidence
             </dt>
