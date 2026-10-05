@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useId, useMemo, useState, type ReactNode } from 'react';
+import { SourcePanel } from '@/components/SourcePanel';
 import { DIMENSION_LABELS } from '@/lib/api-types';
+import type { SourceStatus } from '@/lib/facts';
 import { signedPoints } from '@/lib/format';
 import { glossaryFor } from '@/lib/glossary';
 import type { CombinationResult } from '@/lib/scoring/combinations';
@@ -200,14 +202,27 @@ export function SignalRows({
   observations,
   inapplicable,
   dimensions,
+  sources,
+  elapsedMs,
 }: {
   signals: SignalResult[];
   combinations: CombinationResult[];
   observations: ObservationResult[];
   inapplicable: InapplicableSignal[];
   dimensions: DimensionSubtotal[];
+  sources: SourceStatus[];
+  elapsedMs: number;
 }) {
   const scoring = signals.filter((signal) => signal.points !== 0);
+  const findings = [
+    ...combinations.map((entry) => ({ ...entry, sourceUrl: undefined, tag: 'Combination' })),
+    ...scoring.map((entry) => ({
+      ...entry,
+      tag: DIMENSION_LABELS[entry.dimension] ?? entry.dimension,
+    })),
+  ].sort((a, b) => magnitude(b.points) - magnitude(a.points));
+  const topFindings = findings.slice(0, 3);
+  const [showAll, setShowAll] = useState(false);
 
   /**
    * Which rows are open, keyed by signal id and deliberately outliving a re-query.
@@ -292,141 +307,169 @@ export function SignalRows({
     }))
     .sort((a, b) => (subtotal.get(b.dimension) ?? 0) - (subtotal.get(a.dimension) ?? 0));
 
-  /*
-   * Only the rows on screen without opening something else first. The unscored and inapplicable groups
-   * are behind their own disclosures, and expanding into a section a reader has not opened would be
-   * doing something they did not ask for.
-   */
-  const expandable = [...combinations.map((entry) => entry.id), ...scoring.map((entry) => entry.id)];
-  const allOpen = expandable.length > 0 && expandable.every((id) => opened.has(id));
-
-  const toggleAll = () => {
-    setOpened((current) => {
-      const next = new Set(current);
-      for (const id of expandable) {
-        if (allOpen) next.delete(id);
-        else next.add(id);
-      }
-      return next;
-    });
-  };
+  const sourceProblems = sources.filter((source) =>
+    ['timeout', 'rate_limited', 'unavailable'].includes(source.status),
+  );
 
   return (
     <div className="space-y-6">
-      {/* Auditing a verdict means reading the reasoning behind several rows at once, which was a click
-          each and a scroll back to where you were. */}
-      {expandable.length > 0 ? (
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={toggleAll}
-            className="text-sm text-ink-muted underline decoration-dotted underline-offset-4 hover:text-ink"
-          >
-            {allOpen ? 'Collapse all' : `Expand all ${expandable.length}`}
-          </button>
+      {findings.length > 0 ? (
+        <section className="space-y-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <h3 className="text-sm font-semibold">
+              {showAll ? 'All scored findings' : 'Top reasons'}
+            </h3>
+            {findings.length > 3 ? (
+              <button
+                type="button"
+                onClick={() => setShowAll((value) => !value)}
+                className="text-sm text-ink-muted underline decoration-dotted underline-offset-4 hover:text-ink"
+              >
+                {showAll ? 'Show top reasons' : `View all ${findings.length} findings`}
+              </button>
+            ) : null}
+          </div>
+
+          {!showAll ? (
+            <ul className="rounded-lg border border-edge bg-surface-raised px-4">
+              {topFindings.map((finding) => (
+                <Row
+                  key={finding.id}
+                  label={finding.label}
+                  rationale={finding.rationale}
+                  evidence={finding.evidence}
+                  points={finding.points}
+                  sourceUrl={finding.sourceUrl}
+                  tag={finding.tag}
+                  open={opened.has(finding.id)}
+                  onToggle={() => toggle(finding.id)}
+                />
+              ))}
+            </ul>
+          ) : (
+            <div className="space-y-5">
+              {combinations.length > 0 ? (
+                <section>
+                  <h4 className="mb-2 text-sm font-medium text-ink-muted">Combinations</h4>
+                  <ul className="rounded-lg border border-edge bg-surface-raised px-4">
+                    {combinations.map((combination) => (
+                      <Row
+                        key={combination.id}
+                        label={combination.label}
+                        rationale={combination.rationale}
+                        evidence={combination.evidence}
+                        points={combination.points}
+                        tag={combination.mode}
+                        open={opened.has(combination.id)}
+                        onToggle={() => toggle(combination.id)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
+              {sections.map(({ dimension, rows }) => (
+                <section key={dimension}>
+                  <h4 className="mb-2 text-sm font-medium text-ink-muted">
+                    {DIMENSION_LABELS[dimension] ?? dimension}
+                  </h4>
+                  <ul className="rounded-lg border border-edge bg-surface-raised px-4">
+                    {rows.map((signal) => (
+                      <Row
+                        key={signal.id}
+                        label={signal.label}
+                        rationale={signal.rationale}
+                        evidence={signal.evidence}
+                        points={signal.points}
+                        sourceUrl={signal.sourceUrl}
+                        open={opened.has(signal.id)}
+                        onToggle={() => toggle(signal.id)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : (
+        <p className="text-sm text-ink-muted">No finding moved the score.</p>
+      )}
+
+      {sourceProblems.length > 0 ? (
+        <p className="rounded-lg border border-warn/30 bg-warn/5 px-4 py-3 text-sm text-warn">
+          {sourceProblems.length} {sourceProblems.length === 1 ? 'source did' : 'sources did'} not
+          answer, so confidence may be lower. See technical details for status.
+        </p>
+      ) : null}
+
+      <Collapsible
+        summary={(open) => (open ? 'Hide technical details' : 'Technical details')}
+        description={`${sourceProblems.length > 0 ? 'Some sources need attention' : 'No source problems'} · completed in ${elapsedMs} ms`}
+      >
+        <div className="mt-4 space-y-6 rounded-lg border border-dashed border-edge p-4">
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold">Sources</h3>
+            <SourcePanel sources={sources} />
+          </section>
+
+          {unscored.length > 0 ? (
+            <section className="space-y-2">
+              <h3 className="text-sm font-semibold">
+                Other observations <span className="font-normal text-ink-faint">({unscored.length})</span>
+              </h3>
+              <p className="text-sm text-ink-faint">Observed, but did not move the score.</p>
+              <ul className="rounded-lg border border-edge px-4">
+                {unscored.map((entry) => (
+                  <Row
+                    key={entry.id}
+                    label={entry.label}
+                    rationale={entry.rationale}
+                    evidence={entry.evidence}
+                    points={0}
+                    sourceUrl={entry.sourceUrl}
+                    tag={entry.tag}
+                    open={opened.has(entry.id)}
+                    onToggle={() => toggle(entry.id)}
+                  />
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          {inapplicable.length > 0 ? (
+            <section className="space-y-2">
+              <h3 className="text-sm font-semibold">
+                Not applicable <span className="font-normal text-ink-faint">({inapplicable.length})</span>
+              </h3>
+              <ul className="space-y-2">
+                {inapplicable.map((signal) => (
+                  <li key={signal.id} className="text-sm">
+                    <span className="text-ink-muted">{signal.label}</span>
+                    <span className="mt-0.5 block text-ink-faint">{signal.rationale}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          {terms.length > 0 ? (
+            <section className="space-y-2">
+              <h3 className="text-sm font-semibold">Glossary</h3>
+              <dl className="space-y-3">
+                {terms.map((entry) => (
+                  <div key={entry.term}>
+                    <dt className="text-sm font-medium">{entry.term}</dt>
+                    <dd className="mt-0.5 text-sm leading-relaxed text-ink-muted">
+                      {entry.definition}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ) : null}
         </div>
-      ) : null}
-
-      {combinations.length > 0 ? (
-        <section>
-          <h3 className="mb-1 text-sm font-semibold">Combinations</h3>
-          <p className="mb-2 text-sm text-ink-muted">
-            Where the whole differs from the sum of the parts.
-          </p>
-          <ul className="rounded-lg border border-edge bg-surface-raised px-4">
-            {combinations.map((combination) => (
-              <Row
-                key={combination.id}
-                label={combination.label}
-                rationale={combination.rationale}
-                evidence={combination.evidence}
-                points={combination.points}
-                tag={combination.mode}
-                open={opened.has(combination.id)}
-                onToggle={() => toggle(combination.id)}
-              />
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {sections.map(({ dimension, rows }) => (
-        <section key={dimension}>
-          <h3 className="mb-2 text-sm font-semibold">{DIMENSION_LABELS[dimension] ?? dimension}</h3>
-          <ul className="rounded-lg border border-edge bg-surface-raised px-4">
-            {rows.map((signal) => (
-              <Row
-                key={signal.id}
-                label={signal.label}
-                rationale={signal.rationale}
-                evidence={signal.evidence}
-                points={signal.points}
-                sourceUrl={signal.sourceUrl}
-                open={opened.has(signal.id)}
-                onToggle={() => toggle(signal.id)}
-              />
-            ))}
-          </ul>
-        </section>
-      ))}
-
-      {unscored.length > 0 ? (
-        <Collapsible
-          summary={(open) =>
-            `${open ? 'Hide' : 'Show'} ${unscored.length} ${unscored.length === 1 ? 'finding' : 'findings'} that did not move the score`}
-          description="Observed and charged nothing. Open to see why."
-        >
-          <ul className="mt-3 rounded-lg border border-dashed border-edge px-4">
-            {unscored.map((entry) => (
-              <Row
-                key={entry.id}
-                label={entry.label}
-                rationale={entry.rationale}
-                evidence={entry.evidence}
-                points={0}
-                sourceUrl={entry.sourceUrl}
-                tag={entry.tag}
-                open={opened.has(entry.id)}
-                onToggle={() => toggle(entry.id)}
-              />
-            ))}
-          </ul>
-        </Collapsible>
-      ) : null}
-
-      {inapplicable.length > 0 ? (
-        <Collapsible
-          summary={(open) =>
-            `${open ? 'Hide' : 'Show'} ${inapplicable.length} ${inapplicable.length === 1 ? 'heuristic' : 'heuristics'} that did not apply`}
-          description="A heuristic that did not apply is different from one that scored zero: there was nothing to measure at all, so there is no observation to report."
-        >
-          <ul className="mt-3 space-y-2 rounded-lg border border-dashed border-edge p-4">
-            {inapplicable.map((signal) => (
-              <li key={signal.id} className="text-sm">
-                <span className="text-ink-muted">{signal.label}</span>
-                <span className="mt-0.5 block text-sm text-ink-faint">{signal.rationale}</span>
-              </li>
-            ))}
-          </ul>
-        </Collapsible>
-      ) : null}
-
-      {terms.length > 0 ? (
-        <Collapsible
-          summary={(open) =>
-            `${open ? 'Hide' : 'Show'} what ${terms.length} ${terms.length === 1 ? 'term' : 'terms'} above ${terms.length === 1 ? 'means' : 'mean'}`}
-          description="Acronyms used in this domain's findings."
-        >
-          <dl className="mt-3 space-y-3 rounded-lg border border-dashed border-edge p-4">
-            {terms.map((entry) => (
-              <div key={entry.term}>
-                <dt className="text-sm font-medium">{entry.term}</dt>
-                <dd className="mt-0.5 text-sm leading-relaxed text-ink-muted">{entry.definition}</dd>
-              </div>
-            ))}
-          </dl>
-        </Collapsible>
-      ) : null}
+      </Collapsible>
     </div>
   );
 }

@@ -1,13 +1,8 @@
-import { bandPosition, VERDICT_LABELS } from '@/lib/scoring/verdict';
-import { DEFAULT_CONFIG, type Verdict } from '@/lib/scoring/weights';
+import type { Verdict } from '@/lib/scoring/weights';
 
 /**
- * Two numbers, never one: the score and how much evidence stands behind it.
- *
- * Confidence is drawn as a second arc concentric with the score rather than as a statistic beside it,
- * because a mid-range score with thin coverage means something entirely different from the same score
- * with every source answering, and a reader who takes in only the large number will not know which they
- * have. Putting both in the same glance is the only way the second number does its job.
+ * The verdict at a glance. Confidence stays equally explicit, but as text rather than a second arc that
+ * needs a legend to decode.
  */
 const VERDICT_COLOURS: Record<Verdict, { arc: string; text: string; ring: string }> = {
   high_risk: { arc: 'stroke-danger', text: 'text-danger', ring: 'ring-danger/30' },
@@ -22,7 +17,6 @@ const VERDICT_COLOURS: Record<Verdict, { arc: string; text: string; ring: string
 /** Three quarters of a circle, so the gap reads as a gauge rather than a pie chart. */
 const SWEEP = 0.75;
 const SCORE_RADIUS = 54;
-const CONFIDENCE_RADIUS = 40;
 
 function arc(radius: number, fraction: number) {
   const circumference = 2 * Math.PI * radius;
@@ -47,27 +41,16 @@ export function ScoreGauge({
 }) {
   const colours = VERDICT_COLOURS[verdict];
   const score = arc(SCORE_RADIUS, legitimacy / 100);
-  const coverage = arc(CONFIDENCE_RADIUS, confidence / 100);
 
   // Below the threshold the verdict is withheld, so the arc is dashed to show the score is not standing
   // on much rather than letting it render as solidly as a fully evidenced one.
   const withheld = verdict === 'insufficient_evidence';
-
-  /*
-   * A band is a range, and its name on the badge hides where in that range the domain fell. A 69 and
-   * a 55 are both "Probably legitimate"; only one of them is a point away from being called something
-   * else. The nearer edge is the fact worth a sentence; the band's name and bounds are already on
-   * the badge and the gauge.
-   *
-   * Withheld verdicts get none of this: the band they would fall in is exactly the guess the
-   * confidence floor exists to refuse.
-   */
-  const band = withheld ? undefined : bandPosition(legitimacy, DEFAULT_CONFIG);
+  const confidenceLabel = confidence >= 80 ? 'High' : confidence >= 40 ? 'Moderate' : 'Low';
 
   return (
     <div className="flex flex-col items-center gap-4 sm:flex-row sm:gap-6">
       <div
-        className="relative h-[148px] w-[148px] shrink-0"
+        className="relative h-[132px] w-[132px] shrink-0"
         role="img"
         aria-label={`Legitimacy ${legitimacy} of 100, confidence ${confidence} of 100. Verdict: ${verdictLabel}.`}
       >
@@ -95,27 +78,6 @@ export function ScoreGauge({
             style={{ ['--arc-length' as string]: `${score.track}px` }}
           />
 
-          <circle
-            cx="74"
-            cy="74"
-            r={CONFIDENCE_RADIUS}
-            fill="none"
-            className="stroke-edge"
-            strokeWidth="4"
-            strokeLinecap="round"
-            strokeDasharray={coverage.trackDash}
-          />
-          <circle
-            className="arc-value stroke-ink-muted"
-            cx="74"
-            cy="74"
-            r={CONFIDENCE_RADIUS}
-            fill="none"
-            strokeWidth="4"
-            strokeLinecap="round"
-            strokeDasharray={coverage.dash}
-            style={{ ['--arc-length' as string]: `${coverage.track}px` }}
-          />
         </svg>
 
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
@@ -131,23 +93,9 @@ export function ScoreGauge({
           {verdictLabel}
         </div>
 
-        {band?.nearest ? (
-          <p className="mt-2 max-w-xs text-sm leading-relaxed text-ink-muted">
-            <span className="tabular-nums">{band.nearest.distance}</span>{' '}
-            {band.nearest.distance === 1 ? 'point' : 'points'} from{' '}
-            {VERDICT_LABELS[band.nearest.verdict]}
-          </p>
-        ) : null}
-
-        <dl className="mt-3 text-sm">
-          <div>
-            <dt className="flex items-center justify-center gap-1.5 text-xs uppercase tracking-wide text-ink-faint sm:justify-start">
-              <span aria-hidden className="h-0.5 w-3 rounded-full bg-ink-muted" />
-              Confidence
-            </dt>
-            <dd className="mt-0.5 text-lg font-semibold tabular-nums text-ink-muted">{confidence}</dd>
-          </div>
-        </dl>
+        <p className="mt-3 text-sm text-ink-muted">
+          {confidenceLabel} confidence <span className="tabular-nums">({confidence}%)</span>
+        </p>
 
         {withheld ? (
           <p className="mt-2 max-w-xs text-sm leading-relaxed text-ink-faint">

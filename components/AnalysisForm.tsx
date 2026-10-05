@@ -20,7 +20,7 @@ export function AnalysisForm({ value, onChange, onSubmit, pending }: Props) {
       <label htmlFor="domain" className="block text-sm font-medium">
         Domain or email address
       </label>
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row">
         <input
           id="domain"
           value={value}
@@ -39,13 +39,13 @@ export function AnalysisForm({ value, onChange, onSubmit, pending }: Props) {
           // Dimmed enough to read as unavailable, not so far that the label stops meeting contrast.
           // At 40% this was the least legible text on the page, and it is the one control that tells a
           // first-time reader what the page does.
-          className="shrink-0 rounded-lg bg-ink px-4 py-2.5 text-sm font-medium text-surface transition-opacity disabled:opacity-70"
+          className="w-full shrink-0 rounded-lg bg-ink px-4 py-2.5 text-sm font-medium text-surface transition-opacity disabled:opacity-70 sm:w-auto"
         >
           {pending ? 'Analysing' : 'Analyse'}
         </button>
       </div>
       <p id="domain-help" className="text-sm text-ink-faint">
-        If you paste an address, everything before the @ is removed.
+        Email addresses are reduced to their domain; the part before @ is never sent or stored.
       </p>
     </form>
   );

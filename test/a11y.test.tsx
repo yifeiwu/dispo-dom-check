@@ -165,10 +165,10 @@ describe('accessibility', () => {
     submit();
     await screen.findByText(analysed().narrative);
 
-    // Expanding everything is what puts every panel, every generated id and every `aria-controls`
-    // target on the page at the same time, which is the only arrangement that can collide. The bulk
-    // control goes first: once its rows are open it relabels itself to Collapse all.
-    fireEvent.click(screen.getByRole('button', { name: /expand all/i }));
+    // Show the complete scored list before opening its rows. This puts every panel, every generated id
+    // and every `aria-controls` target on the page at the same time, which is the only arrangement that
+    // can collide.
+    fireEvent.click(screen.getByRole('button', { name: /view all/i }));
 
     // Repeated to a fixed point, because opening a group reveals the rows inside it, and those are
     // collapsed too. Bounded so a disclosure that somehow refuses to open fails the test rather than

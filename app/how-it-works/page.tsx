@@ -122,21 +122,40 @@ export default function HowItWorks() {
       <header className="space-y-3">
         <h2 className="text-xl font-semibold tracking-tight">How the score is built</h2>
         <p className="max-w-3xl text-base leading-relaxed text-ink-muted">
-          The abuse being detected is mass account creation, so the question is not whether a domain is
-          malicious but whether it can mint unlimited mailboxes cheaply, and whether it was created to do
-          so. Every credit below is paid on evidence somebody other than the domain had to supply, which
-          is the thing an account farmer cannot mint at scale. Records a domain publishes about itself
-          are still read and still shown, because they are facts a reader wants, but they score nothing
-          in either direction.
+          This checks whether a domain has the economics and mail setup needed for mass account creation.
+          It is not a general malware or phishing detector.
         </p>
         <p className="max-w-3xl text-base leading-relaxed text-ink-muted">
-          This page is generated from the live scoring configuration, model version{' '}
-          <span className="font-mono">{DEFAULT_CONFIG.modelVersion}</span>, so it cannot drift from what
-          the scorer actually does. The same content is available from{' '}
-          <span className="font-mono">/api/model</span>.
+          The governing rule is simple: missing evidence lowers confidence; only positive evidence of a
+          problem lowers legitimacy.
         </p>
       </header>
 
+      <ol className="grid gap-3 sm:grid-cols-3">
+        {[
+          ['1', 'Collect evidence', 'Read registration, DNS, mail, pricing and website signals.'],
+          ['2', 'Score dimensions', 'Combine corroborated signals without letting one category decide alone.'],
+          ['3', 'Report confidence', 'Show how much of the evidence was available alongside the verdict.'],
+        ].map(([number, title, description]) => (
+          <li key={number} className="rounded-lg border border-edge bg-surface-raised p-4">
+            <span className="text-xs font-medium text-accent">Step {number}</span>
+            <h3 className="mt-1 text-sm font-semibold">{title}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-ink-muted">{description}</p>
+          </li>
+        ))}
+      </ol>
+
+      <details className="group rounded-lg border border-edge">
+        <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium">
+          <span className="inline-flex items-center gap-2">
+            <span aria-hidden className="text-ink-faint transition-transform group-open:rotate-90">›</span>
+            Model reference
+          </span>
+          <span className="mt-1 block pl-4 text-sm font-normal text-ink-faint">
+            Every heuristic, limit and exclusion · model {DEFAULT_CONFIG.modelVersion}
+          </span>
+        </summary>
+        <div className="space-y-10 border-t border-edge p-4 sm:p-6">
       {/* The registry below runs to every heuristic in the model, which is long by design and unusable
           without a way in. */}
       <nav aria-label="On this page" className="rounded-lg border border-edge bg-surface-raised p-4">
@@ -327,6 +346,8 @@ export default function HowItWorks() {
           </li>
         </ul>
       </Section>
+        </div>
+      </details>
     </article>
   );
 }
