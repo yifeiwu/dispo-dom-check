@@ -1,5 +1,7 @@
 import type { CollectorResult, CollectorStatus, SourceId } from './collector';
 import type { ProviderSuffix } from './data/provider-suffixes';
+import type { RedirectTargetClass } from './data/redirect-targets';
+import type { PlatformMatch } from './data/site-platforms';
 
 /**
  * `DomainFacts` is the one normalised output of every collector, and the only input to scoring.
@@ -204,12 +206,30 @@ export type SiteFacts = {
   redirectedOffDomain: boolean;
   redirectTarget?: {
     host: string;
-    class: 'parking' | 'hosted_destination' | 'social_profile' | 'unknown';
+    /** Imported rather than restated, so adding a class is one edit instead of two that can disagree. */
+    class: RedirectTargetClass;
     provider?: string;
   };
   title?: string;
   /** Visible text length after stripping markup, used for substantive-content detection. */
   contentLength?: number;
+  /**
+   * Distinct same-domain paths the root page links to, which is "is there anywhere else to go".
+   *
+   * Read from the anchors in the response already fetched, so it costs no request. It is the
+   * difference between a website and a single page, and it is the second half of the substantive
+   * test: a title and five hundred characters of text describe a farm's landing page just as well as
+   * a business's homepage, while somewhere else to go does not.
+   */
+  internalPaths?: number;
+  /**
+   * The phrase by which the page title names itself a disposable-mail service, when it does.
+   *
+   * This is the only disposable detector that identifies a *provider* rather than one of its customers,
+   * and the only one that reads the site rather than the mail configuration. See
+   * `lib/data/disposable-fingerprints.ts` for why it is the title and not the body.
+   */
+  declaredDisposable?: string;
   substantive: boolean;
   parked: boolean;
   parkingEvidence?: string;
@@ -226,12 +246,7 @@ export type SiteFacts = {
    * See `lib/data/site-platforms.ts` for what separates the two confirmation tiers, and why only one of
    * them can support a credit.
    */
-  platform?: {
-    provider: string;
-    confirmation: 'served' | 'served_and_addressed';
-    paidCustomDomain: boolean;
-    matchedOn: string;
-  };
+  platform?: PlatformMatch;
 };
 
 /**
@@ -309,6 +324,17 @@ export type SourceStatus = {
   elapsedMs: number;
   sourceUrl?: string;
 };
+
+/**
+ * The address a named source reported, for the evidence link beneath a row.
+ *
+ * Keyed on `SourceId` rather than on a loose string, so a renamed source is a type error here instead
+ * of a link that silently stops resolving. Shared by the signal and observation registries, which both
+ * read it and had each grown their own copy.
+ */
+export function sourceUrlFor(facts: DomainFacts, source: SourceId): string | undefined {
+  return facts.sources.find((entry) => entry.source === source)?.sourceUrl;
+}
 
 export function toSourceStatus(result: CollectorResult<unknown>): SourceStatus {
   return {

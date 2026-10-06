@@ -1,4 +1,5 @@
 import type { DnsFacts, RegistrationFacts, RegistrarDefaultFacts, SignupFacts } from '../facts';
+import { isAtOrUnder } from '../hostname';
 
 type RegistrarDefault = {
   provider: string;
@@ -33,11 +34,6 @@ const REGISTRAR_DEFAULTS: readonly RegistrarDefault[] = [
  * table, so the entry could never have fired. See the note in `lib/data/free-mail-routing.ts`.
  */
 
-function matchesSuffix(value: string, pattern: string): boolean {
-  const normalised = value.toLowerCase().replace(/\.$/, '');
-  return normalised === pattern || normalised.endsWith(`.${pattern}`);
-}
-
 export function detectRegistrarDefault(
   registration: RegistrationFacts | undefined,
   dns: DnsFacts | undefined,
@@ -53,11 +49,11 @@ export function detectRegistrarDefault(
     if (!registrarMatches) continue;
 
     const nameserver = dns.ns.find((host) =>
-      entry.nameserverPatterns.some((pattern) => matchesSuffix(host, pattern)),
+      entry.nameserverPatterns.some((pattern) => isAtOrUnder(host, pattern)),
     );
     const forwardingMx = dns.mx
       .map(({ host }) => host)
-      .find((host) => entry.forwardingMxPatterns.some((pattern) => matchesSuffix(host, pattern)));
+      .find((host) => entry.forwardingMxPatterns.some((pattern) => isAtOrUnder(host, pattern)));
 
     if (nameserver && forwardingMx) {
       return { provider: entry.provider, nameserver, forwardingMx };

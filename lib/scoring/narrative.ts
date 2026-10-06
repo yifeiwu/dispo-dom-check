@@ -1,5 +1,6 @@
 import type { SourceId } from '../collector';
 import type { DomainFacts, SourceStatus } from '../facts';
+import { isRegistrationSource, registrationIn } from '../registration-source';
 import type { ScoreResult } from './score';
 
 /**
@@ -12,6 +13,17 @@ import type { ScoreResult } from './score';
  */
 export function narrate(result: ScoreResult, facts: DomainFacts): string {
   const sentences: string[] = [];
+
+  /*
+   * Stated first and on its own, because everything after it describes a score the verdict has just
+   * declined to stand behind. A reader who sees the drivers without this sentence has no way to tell a
+   * domain the model scored from one it refused to.
+   */
+  if (result.verdict === 'out_of_scope') {
+    sentences.push(
+      `Mail for this name is handled by ${facts.signup?.provider ?? 'a consumer mail provider'}, so it is a mailbox shared by a great many unrelated people rather than one organisation's domain. No verdict is given: what is below is what was observed, not a judgement about any account here.`,
+    );
+  }
 
   if (facts.meta.providerSuffix) {
     sentences.push(
@@ -117,9 +129,6 @@ function joinPhrases(parts: string[]): string {
   return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
 
-const isRegistration = (source: SourceStatus): boolean =>
-  source.source === 'rdap' || source.source === 'whois';
-
 /**
  * Collapses the two registration protocols into the one logical source a reader thinks in.
  *
@@ -133,15 +142,18 @@ const isRegistration = (source: SourceStatus): boolean =>
  * did, the pair keeps whichever one was actually attempted, so a registry that was unreachable reads
  * as a failure while a platform-issued name, where both are skipped because registration genuinely
  * belongs to the provider, reads as inapplicable.
+ *
+ * Which of the pair stands for it is `registrationIn`, shared with the source panel so that a
+ * sentence and a table cannot name different transports for the same record.
  */
 function logicalSources(sources: SourceStatus[]): SourceStatus[] {
-  const registration = sources.filter(isRegistration);
+  const registration = sources.filter((source) => isRegistrationSource(source.source));
   if (registration.length === 0) return sources;
-  if (registration.some((source) => source.status === 'ok')) {
-    return sources.filter((source) => !isRegistration(source));
+  const spoke = registrationIn(sources) ?? registration[0];
+  if (spoke.status === 'ok') {
+    return sources.filter((source) => !isRegistrationSource(source.source));
   }
-  const attempted = registration.find((source) => source.status !== 'skipped') ?? registration[0];
-  return sources.filter((source) => !isRegistration(source) || source === attempted);
+  return sources.filter((source) => !isRegistrationSource(source.source) || source === spoke);
 }
 
 /**

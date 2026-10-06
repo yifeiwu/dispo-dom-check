@@ -1,11 +1,11 @@
-import type { SourceId } from './collector';
+import type { CollectorStatus, SourceId } from './collector';
 import type { CombinationResult } from './scoring/combinations';
 import type { DimensionSubtotal, InapplicableSignal, ReasonFlag } from './scoring/score';
 import type { ObservationResult } from './scoring/observations';
 import type { SignalResult } from './scoring/signals';
 import type { SourceStatus } from './facts';
 import type { ProviderSuffix } from './data/provider-suffixes';
-import type { Verdict } from './scoring/weights';
+import type { Dimension, Verdict } from './scoring/weights';
 
 /** The response contract, shared by the route and the client so the two cannot drift apart. */
 export type AnalyzeResponse = {
@@ -79,21 +79,22 @@ export type AnalyzeStreamEvent =
   | ({ type: 'result' } & AnalyzeResponse)
   | ({ type: 'error' } & ErrorResponse);
 
-export const FLAG_LABELS: Record<ReasonFlag, string> = {
-  disposable: 'Disposable mail',
-  forwarder: 'Alias forwarder',
-  catch_all_capable: 'Catch-all capable',
-  no_mx: 'No inbound mail',
-  too_new: 'Very new',
-  provider_subdomain: 'Platform subdomain',
-  free_subdomain: 'Free subdomain',
-  parked: 'Parked',
-  farm_profile: 'Farm profile',
-  registrar_default: 'Registrar-default profile',
-  registry_hold: 'Registry hold',
-};
+/*
+ * There is no `FLAG_LABELS` here any more.
+ *
+ * It supplied the headings for the pills that used to run under the verdict, and the pills went when
+ * the result card was reduced to the gauge and the narrative. `flags` itself stays on the response
+ * and is still derived and still tested, because it is the machine-readable half of the contract and
+ * a caller filtering on `disposable` needs it whether or not this UI draws it. What went is one
+ * presentation of it that nothing presents.
+ */
 
-export const DIMENSION_LABELS: Record<string, string> = {
+/**
+ * Keyed on `Dimension` for the reason `SOURCE_LABELS` is keyed on `SourceId`: a dimension added
+ * without a heading should be a type error rather than a raw identifier rendered to a reader. The
+ * components still fall back, since they render whatever a JSON response actually carried.
+ */
+export const DIMENSION_LABELS: Record<Dimension, string> = {
   signup: 'Signup capability',
   economics: 'Registration economics',
   age: 'Age and registration',
@@ -134,7 +135,7 @@ export const SOURCE_ORDER: SourceId[] = [
   'signup',
 ];
 
-export const STATUS_LABELS: Record<string, string> = {
+export const STATUS_LABELS: Record<CollectorStatus, string> = {
   ok: 'Answered',
   timeout: 'Timed out',
   rate_limited: 'Rate limited',
@@ -142,3 +143,22 @@ export const STATUS_LABELS: Record<string, string> = {
   unsupported: 'Not applicable',
   skipped: 'Skipped',
 };
+
+/**
+ * Looking a heading up, for a key that came off a JSON response rather than out of the registry.
+ *
+ * The tables above are keyed on their union types so that adding a dimension, source or status
+ * without a heading fails to compile. The components cannot promise the same, because they render
+ * whatever a payload actually carried — an older or newer service answering this page is a thing that
+ * happens. Falling back to the raw identifier is right for that, and writing the fallback at each of
+ * the eleven call sites was the version that let three of them quietly disagree about whether there
+ * was one at all.
+ */
+const labelled =
+  <K extends string>(table: Record<K, string>) =>
+  (key: string): string =>
+    (table as Record<string, string | undefined>)[key] ?? key;
+
+export const dimensionLabel = labelled(DIMENSION_LABELS);
+export const sourceLabel = labelled(SOURCE_LABELS);
+export const statusLabel = labelled(STATUS_LABELS);

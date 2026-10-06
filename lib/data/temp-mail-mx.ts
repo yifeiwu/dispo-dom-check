@@ -1,3 +1,4 @@
+import { isAtOrUnder } from '../hostname';
 import type { MxFingerprint } from './mx-match';
 
 /**
@@ -138,10 +139,8 @@ export function matchTempMailSpf(
 export function matchTempMailNs(nameservers: readonly string[] | undefined): string | null {
   if (!nameservers || TEMP_MAIL_NS.length === 0) return null;
   for (const host of nameservers) {
-    const normalised = host.toLowerCase().replace(/\.$/, '');
     for (const { pattern, provider } of TEMP_MAIL_NS) {
-      const needle = pattern.toLowerCase();
-      if (normalised === needle || normalised.endsWith(`.${needle}`)) return provider;
+      if (isAtOrUnder(host, pattern)) return provider;
     }
   }
   return null;

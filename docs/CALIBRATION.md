@@ -253,19 +253,175 @@ Scoring `legitimacy`, where higher is more legitimate:
 
 | Label | Group | n | median | mean | p10 | p90 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ABUSE` | Abuse | 4,292 | 19 | 23.3 | 0 | 53 |
-| `DISPOSABLE` | Abuse | 123 | 13 | 18.7 | 0 | 45 |
-| `LEGITIMATE` | Legitimate | 212 | 70 | 66.7 | 46 | 89 |
-| `PRIVACY` | Not graded | 58 | 13 | 22.8 | 0 | 59 |
+| `ABUSE` | Abuse | 4,292 | 19 | 22.8 | 0 | 50 |
+| `DISPOSABLE` | Abuse | 123 | 16 | 18.7 | 0 | 44 |
+| `LEGITIMATE` | Legitimate | 212 | 68 | 67.1 | 50 | 86 |
+| `PRIVACY` | Not graded | 58 | 13 | 22.7 | 0 | 54 |
 
 Separation between the abuse and legitimate medians is **51 points**. Ranked by risk,
-abuse-versus-legitimate AUC is **0.943**, family-weighted, over 4,415 abuse against 212 legitimate
-domains. Band errors are 7 legitimate domains in an actionable band (3%) and 207 abuse domains in a
-legitimate band (5%).
+abuse-versus-legitimate AUC is **0.961**, family-weighted, over 4,415 abuse against 212 legitimate
+domains. Band errors are 7 legitimate domains in an actionable band (3%) and 169 abuse domains in a
+legitimate band (4%).
 
 Thirteen domains are absent from the table because they were never scored: two abuse rows rejected as
 malformed input, and eleven legitimate rows ruled `out_of_scope` as shared free provider vanity domains,
-which is the gate working rather than a failure to score them.
+which is the gate working rather than a failure to score them. A further 19 legitimate rows are scored
+and present here but carry an `out_of_scope` verdict from `1.8.0`, reached from their mail exchangers
+rather than from the hardcoded list. Those count as neither a false positive nor a false negative, on
+the same footing as the privacy group, which is why the legitimate band counts below sum to 193 rather
+than 212.
+
+### What `1.10.0` was worth
+
+| | `1.9.0` | `1.10.0` |
+| --- | --- | --- |
+| AUC, family-weighted | 0.960 | 0.961 |
+| Legitimate domains in an actionable band | 7 (3.3%) | 7 (3.3%) |
+| Legitimate domains in a legitimate band | 163 | 163 |
+| Legitimate domains `unclear` | 23 | 23 |
+| Abuse domains in a legitimate band | 175 (4.0%) | 169 (3.8%) |
+
+Specificity-neutral again, and for the same structural reason as `1.9.0`: the legitimate distribution is
+identical row for row, because a legitimate domain does not title its homepage after a throwaway-inbox
+product. The signal fires on 62 families at a 100% abuse and 0% legitimate rate, and the audit tiers it
+`KEEP measurably useful`.
+
+The interesting part is what the measurement said about the two halves of the change, because they
+divide unevenly.
+
+**The detection does the band work and the cap does none of it.** Disabling the cap entirely leaves AUC
+and both band-error counts unchanged, because `signup.tempMail` is -40 and the signup clamp floors at
+-40, so one dispositive signal already drives the score far enough on its own. The cap earns its place
+on a finer distinction: it binds on 7 domains and moves every one of them from `suspicious` to
+`high_risk`. All 7 are self-declared temp-mail services, and the two verdicts carry different
+instructions — `suspicious` reads "worth additional friction at signup rather than an outright block",
+which is the wrong advice about a service whose entire product is throwaway addresses. The band-error
+metric cannot see that, since both bands count as actionable.
+
+Its other reason is unmeasurable here by construction. `checkmail` is the only source never queried in a
+replayed run, so the case the cap most exists for — a reputation vendor returning a disposable verdict
+against a domain holding +20 age, +8 record breadth and a paid tenancy — never arises in this holdout
+and will be the common case in production. A unit test pins it instead, including the inversion the
+first implementation nearly shipped: keying the cap on `signup.checkmail` having fired would have capped
+every domain the vendor *cleared*, because one signal covers the vendor's whole answer and returns a
+credit for a clean one.
+
+Two variants were measured and refused:
+
+- **Matching the phrases in the page body as well as the title** tripled the abuse domains recovered
+  from a legitimate band, 5 to 15, and cost one legitimate page. That is `silomails.com`, a SimpleLogin
+  alias domain that describes the service it belongs to in its own copy. At a signal that saturates the
+  dimension floor and caps the verdict, one legitimate page is the wrong price for a phrase that might
+  be commentary rather than self-description — an anti-abuse vendor discusses disposable mail at length.
+- **Capping on the existing `RELAY_DOMAINS` table** was the obvious way to reach privacy relays, and
+  would have created four new false positives: `opayq.com` at 76, `duck.com` at 68, and `passmail.net`
+  and `silomails.com` at 40. That table lists the domains providers *issue aliases under*, and the
+  holdout labels several of them legitimate. It is also the penalty an earlier version already removed
+  after it fired on twelve families and none of them was abuse. Reading the page instead of the table
+  keeps the test on what a domain says about itself.
+
+### What `1.9.0` was worth
+
+Four changes to how the site probe's bytes are read, replayed through the same stored transcripts.
+
+| | `1.8.0` | `1.9.0` |
+| --- | --- | --- |
+| AUC, family-weighted | 0.957 | 0.960 |
+| Legitimate domains in an actionable band | 7 (3.3%) | 7 (3.3%) |
+| Legitimate domains in a legitimate band | 163 | 163 |
+| Legitimate domains `unclear` | 23 | 23 |
+| Abuse domains in a legitimate band | 194 (4.4%) | 175 (4.0%) |
+
+This version is specificity-neutral by construction and reads as pure sensitivity: 19 abuse domains
+left a legitimate band and not one legitimate domain moved in any direction. That is the intended
+shape. Both changes withdraw a credit, or apply a penalty, on evidence a legitimate site nearly always
+has — internal navigation, and not announcing itself as parked — so the population they bite on is
+almost entirely abuse.
+
+Holding the legitimate column exactly flat was not free, and the work was in the variants that did not
+ship:
+
+| Variant | AUC | Legitimate actionable | Abuse in legitimate band |
+| --- | --- | --- | --- |
+| Navigation required, no text hatch | 0.959 | **8** | 175 |
+| Two or more paths, with hatch | 0.959 | 7 | **174** |
+| **One or more paths, or 15,000 characters** | **0.960** | **7** | **175** |
+
+- **Dropping the text hatch** costs a legitimate domain and gains nothing — the entire abuse gain is
+  already taken without it. The domain it costs is a script-rendered site with no anchor in the served
+  HTML, and the hatch recovers it while still excluding every placeholder page in the holdout by an
+  order of magnitude, which is why the bound sits where nothing lives rather than between two
+  neighbouring clusters.
+- **Requiring two or more paths** buys one abuse domain for a hundredth of AUC, and the
+  false-positive count only looks unchanged: one of the seven moves from `suspicious` into `high_risk`,
+  so the same number of legitimate domains are wrong by a larger margin. It is also the harder
+  threshold to defend, since "somewhere else to go" means one place, and 2 would be a number chosen
+  because it scored well. The distribution gives no reason to prefer it: internal paths are bimodal at
+  zero rather than graded, with an abuse median of 0 against a legitimate median of 9.
+- **Matching `hostinger.com` and `spaceship.com` in asset paths** separated 194 abuse pages from 0
+  legitimate ones, the cleanest-looking split found in this whole pass, and was refused. It is hosting
+  reputation, which this project declines for ASN and IP range on the grounds that shared reseller
+  hosting is how a great many legitimate small businesses are hosted; a 0 out of 212 legitimate count
+  is what that inference looks like just before it misclassifies somebody. The page titles carry the
+  same 121 and 90 domains and are a property of the page.
+
+The new parking titles are also the first entries in that table to have been validated against the
+legitimate set before being added rather than after. Two candidates were dropped by that check — bare
+`default page`, which matched 19 legitimate pages, and the 5xx error strings, which describe an origin
+that is briefly unreachable rather than a domain that is parked.
+
+The signal audit's own view of the content credit moved accordingly: its legitimate firing rate is
+unchanged while its abuse firing rate fell by 200 domains, which is the form a precision gain takes
+when the credit is being withheld rather than the penalty extended.
+
+### What `1.8.0` was worth
+
+Six changes, measured against the same stored transcripts replayed through the changed collectors, so
+nothing here is new evidence. The before column is the `1.7.0` model on the same collection.
+
+| | `1.7.0` | `1.8.0` |
+| --- | --- | --- |
+| AUC, family-weighted | 0.944 | 0.957 |
+| Legitimate domains in an actionable band | 7 (3.3%) | 7 (3.3%) |
+| Legitimate domains in a legitimate band | 151 | 163 |
+| Legitimate domains `unclear` | 54 | 23 |
+| Abuse domains in a legitimate band | 216 (4.9%) | 194 (4.4%) |
+
+The false-positive count is the figure to read first, because it did not move. None of this was bought
+by becoming more willing to call a real business suspicious. What moved instead is the middle of the
+legitimate distribution: 31 legitimate domains left `unclear` for a verdict, which is the specificity
+gain, and 22 abuse domains left a legitimate band, which is the sensitivity gain.
+
+No change here retunes a signal weight. Five correct a reading of evidence the analysis was already
+fetching, and the sixth is a clamp. In rough order of what each was worth:
+
+- **The presence-requirement exemption** was the largest. It moved 20 legitimate domains into a
+  legitimate band on its own, almost all of them `.de`, where a -8 price penalty had been cancelling
+  the +8 those same domains earned for record breadth while DENIC publishes no creation date. It also
+  sharpened the signal it exempts rather than weakening it: the price penalty's legitimate firing rate
+  fell from 29% to 13%, its separation rose from 2.89 to 4.04, and its ΔAUC went from +0.001 on an
+  interval spanning zero to +0.005 on one that excludes it. Exactly one abuse domain crossed into a
+  legitimate band.
+- **The configuration clamp**, from 10 to 6, recovered 26 abuse domains for one legitimate one. The
+  full curve and the reason it does not go to 4 are in [`weights.ts`](../lib/scoring/weights.ts); the
+  short version is that the sweep's objective counts only actionable-band false positives and so
+  cannot see thirteen legitimate domains falling into `unclear` between 6 and 4.
+- **The accredited-suffix additions** moved four Egyptian Ministry of Education school domains from
+  46 and `unclear` to 61, and the other 56 suffixes fired on nothing in this holdout, which is the
+  expected result for a list extended by criterion rather than by measurement.
+- **The placeholder-phrase split** released five working sites from a parking penalty they should
+  never have had, at the cost of one abuse domain crossing a band. All three genuine parking pages
+  that cleared the substantive bar kept the penalty.
+- **The tenancy suppression** moved the nine `onmicrosoft.com` domains off a penalty every one of them
+  was paying, six legitimate and three abuse. Two abuse tenancies crossed into a legitimate band,
+  which is the honest cost of removing a penalty that could not discriminate.
+- **The preferred-exchanger restriction** on the paid-tenancy credit took it from four domains that
+  had a paid exchanger listed only as a backup, three of them abuse.
+
+Two sweep recommendations were declined, both unanimous across folds, and both are argued where the
+weight lives rather than here: `clamps.configuration.max` to 4, for the reason above, and
+`signup.paidTenant` to 0, which would buy 2.2 abuse domains by deleting the one credit in the model
+that satisfies the verification rule outright.
 
 ### What the `1.5.0` collection was worth, separated from the model change
 

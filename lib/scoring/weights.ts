@@ -56,7 +56,7 @@ export type ScoringConfig = Omit<DeepWiden<typeof DEFAULT_CONFIG>, 'verdictBands
 };
 
 export const DEFAULT_CONFIG = {
-  modelVersion: '1.7.0',
+  modelVersion: '1.10.0',
 
   /** Additive evidence starts from a neutral midpoint rather than from zero or from full trust. */
   neutralBase: 50,
@@ -80,6 +80,40 @@ export const DEFAULT_CONFIG = {
    * the total was preferred to repricing either signal, because each is individually well-behaved and it
    * is only their sum that overstates the case.
    *
+   * It fell again to 6 in 1.8.0. The bound moved because what it bounds got cleaner rather than
+   * because the objective changed: suppressing record breadth on platform-issued tenancies took the
+   * signal's most degenerate population out of it, and exempting the presence-gated registries from
+   * the price penalty stopped a -8 from quietly absorbing the overpayment on several hundred European
+   * domains. With both of those gone the double-count is no longer being cancelled by an unrelated
+   * error, and the sweep can see its true size.
+   *
+   * Six is close enough to a single credit that it is worth saying what survives: either credit alone
+   * still pays in full, and only the sum is cut. That is the intended reading. Both are facts the
+   * domain asserts about itself — it publishes its own records and writes its own title — and the
+   * verification rule this model is built on says self-asserted evidence may corroborate but should
+   * never accumulate.
+   *
+   * The sweep picks 4, unanimously, and 4 is not what ships. This is the one place in the model where
+   * the sweep's objective is too narrow for the decision, so the disagreement is worth setting out in
+   * full rather than resolving quietly. That objective counts legitimate domains landing in an
+   * *actionable* band, and by that measure everything from 10 down to 4 is free. The curve over the
+   * holdout says otherwise:
+   *
+   *   clamp   legit in a legitimate band   legit unclear   legit actionable   abuse in a legitimate band
+   *      10                          164              22                  7                          220
+   *       8                          164              22                  7                          208
+   *       6                          163              23                  7                          194
+   *       4                          150              36                  7                          177
+   *       2                          148              35                 10                          158
+   *
+   * Nothing is paid down to 8, one legitimate domain is paid at 6, and thirteen more are paid between
+   * 6 and 4 — the slope changes by a factor of thirteen in a single step, which is a knee rather than
+   * noise. Those thirteen do not become false positives; they become `unclear`, which is why the sweep
+   * cannot see them. But `unclear` is the model declining to answer, and spending thirteen real small
+   * businesses' verdicts to recover seventeen abuse domains out of 4,415 is a trade worth refusing. At
+   * 6 the bound has taken 26 of the 43 abuse domains available across the whole range for the cost of
+   * one. Below 4 the false-positive budget breaks outright.
+   *
    * `mail.max` and `footprint.max` fell in 1.3.0 to follow the credits zeroed out of both dimensions.
    * Leaving them at 14 and 20 would have left two bounds that can never bind, which is the state this
    * comment exists to prevent: a clamp wide enough to look protective over a dimension that can no
@@ -99,7 +133,7 @@ export const DEFAULT_CONFIG = {
     economics: { min: -18, max: 0 },
     age: { min: -30, max: 20 },
     mail: { min: -6, max: 4 },
-    configuration: { min: -10, max: 10 },
+    configuration: { min: -10, max: 6 },
     site: { min: -12, max: 6 },
     name: { min: -5, max: 15 },
   } satisfies Record<Dimension, { min: number; max: number }>,
@@ -136,6 +170,28 @@ export const DEFAULT_CONFIG = {
      */
     ambiguousRouting: -8,
     forwarder: -12,
+    /**
+     * Held at 6 against a unanimous sweep, which is worth recording because the sweep will keep asking.
+     *
+     * It picks 0 in all five folds, admitting no legitimate domain to an actionable band and taking
+     * roughly two abuse domains out of a legitimate one. The reason to refuse is that two domains out
+     * of 4,415 is not what the signal is for, and the other half of the same audit rates it among the
+     * better discriminators present: it fires on 42% of legitimate families against 6% of abuse ones,
+     * with a lift interval of 0.71-0.81 that sits entirely below 1.00, and removing it costs 0.003 of
+     * AUC on an interval that excludes zero.
+     *
+     * Underneath that is the reason the model exists in this shape at all. This is the one credit in
+     * the dimension, and almost the only credit anywhere, that satisfies the verification rule
+     * outright: a paid mail tenancy is a third party refusing delivery to anyone who has not bought
+     * one, so it is not a string the domain can mint. Zeroing it for two verdicts would leave the
+     * scheme able to penalise mail routing and unable to credit it, and a model that can only subtract
+     * reaches its floor on every domain that was never going to clear the bar anyway.
+     *
+     * What would change this is evidence that the credit is being bought cheaply rather than evidence
+     * that it is small. One such route was found and closed in 1.8.0 — it was collectable from a backup
+     * exchanger that no mail would ever reach — and that is the kind of finding this weight should move
+     * on.
+     */
     paidTenant: 6,
     /**
      * A zone that answers with mail exchangers for names nobody created.
@@ -474,6 +530,36 @@ export const DEFAULT_CONFIG = {
   overrides: {
     /** Registry suspension is the only hard cap, since no external verdict remains to defer to. */
     registryHoldCap: 10,
+    /**
+     * A ceiling for a domain confirmed to hand out disposable addresses, whatever else it has built.
+     *
+     * This exists because the additive model asks one question — how much has been invested in this
+     * domain — and arbitrates disposable addressing on the same axis, where it loses. A temp-mail
+     * service genuinely has the age, the DNS records and the working website those credits pay for, so
+     * the credits are not wrong; they are answering a different question. `6po.net` takes the full -40
+     * for free routing and is handed back +16 for age, record breadth and a substantive site, landing at
+     * 45 and `unclear`. `use.startmail.com` reaches 82 and `established` on +20 age, +8 records and a
+     * paid tenancy. Both are exactly what they look like, and the verdict is still useless.
+     *
+     * So the two questions are separated: whether the domain is a real operation stays additive, and
+     * whether it mints throwaway addresses becomes dispositive. That is not a new principle here.
+     * `registryHoldCap` above is the same construction, and `verdict.ts` already routes a shared
+     * consumer provider straight to `out_of_scope` on the reasoning that what matters is not how much
+     * was learned but whether the question applies. This is that insight pointed the other way: for a
+     * disposable provider, domain-level analysis is not uninformative but conclusive, because every
+     * mailbox under it is throwaway by construction.
+     *
+     * Set to the top of the `high_risk` band rather than to a round number, because the cap has one job
+     * — making the verdict actionable — and should take no more than that. It is a ceiling and not an
+     * assignment, so a domain already scoring below it keeps its lower score and the ordering within the
+     * capped set survives. It sits above `registryHoldCap` because a suspension is the registry's own
+     * statement about the domain, where this is our reading of a page.
+     *
+     * Only the dispositive signals trigger it, listed in `score.ts`. Free routing, alias forwarding and
+     * wildcard mail are all deliberately excluded: each fires on ordinary small domains, and capping on
+     * them would convert the model's stated policy of flagging alias capability into condemning it.
+     */
+    disposableCap: 18,
   },
 } as const;
 

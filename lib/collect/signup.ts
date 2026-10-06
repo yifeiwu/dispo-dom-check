@@ -1,4 +1,4 @@
-import { matchMx } from '../data/mx-match';
+import { matchMx, preferredMx } from '../data/mx-match';
 import {
   TEMP_MAIL_MX,
   TEMP_MAIL_MX_ENDPOINTS,
@@ -71,7 +71,15 @@ async function classify(
   spfRecord: string | undefined,
   timeoutMs: number,
 ): Promise<SignupFacts> {
-  const fromHostname = classifyMxHosts(mxHosts, spfRecord, timeoutMs);
+  /*
+   * Penalties are matched over every exchanger and the credit only over the preferred ones.
+   *
+   * The asymmetry is the point and `preferredMx` carries the reasoning. Severity ordering already means
+   * a disposable exchanger wins wherever it sits in the set, which is right: the operator published it.
+   * Paid tenancy is the one class whose evidence is about where mail actually lands, so it cannot be
+   * read off a host no sender will reach.
+   */
+  const fromHostname = classifyMxHosts(mxHosts, preferredMx(dns?.mx ?? []), spfRecord, timeoutMs);
   if (fromHostname) return fromHostname;
 
   // Mail handled inside the domain's own namespace. Common for both a small business running its own
@@ -114,8 +122,17 @@ async function classify(
   };
 }
 
+/**
+ * Classification by hostname table, in severity order.
+ *
+ * `creditable` is the subset of `mxHosts` a *credit* may be paid on, which is the preferred exchangers
+ * when classifying a published MX set and the whole list when classifying what an in-zone exchanger
+ * turned out to be a CNAME onto — in that case the one host examined is the delivery path, so there is
+ * no distinction to draw.
+ */
 function classifyMxHosts(
   mxHosts: string[],
+  creditable: readonly string[],
   spfRecord: string | undefined,
   timeoutMs: number,
 ): Promise<SignupFacts> | SignupFacts | undefined {
@@ -166,7 +183,8 @@ function classifyMxHosts(
     };
   }
 
-  const paid = matchMx(mxHosts, PAID_MAIL_MX);
+  // The one table matched over the delivery path rather than the whole set. See `preferredMx`.
+  const paid = matchMx(creditable, PAID_MAIL_MX);
   if (paid) {
     return {
       class: 'paid_tenant',
@@ -289,7 +307,9 @@ async function identifyInZoneMx(
   const host = mxHosts[0];
   try {
     const { addresses, cnameTargets } = await resolveAddress(host, Math.min(timeoutMs, 1500));
-    const viaCname = classifyMxHosts(cnameTargets, spfRecord, timeoutMs);
+    // Every target here is what the preferred exchanger resolves to, so all of them are the delivery
+    // path and a credit is as well founded as a penalty.
+    const viaCname = classifyMxHosts(cnameTargets, cnameTargets, spfRecord, timeoutMs);
     if (viaCname) {
       const classified = await viaCname;
       return { ...classified, matchedVia: 'cname', selfHosted: true };

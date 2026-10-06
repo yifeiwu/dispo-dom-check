@@ -8,9 +8,13 @@ import { DEFAULT_CONFIG } from '@/lib/scoring/weights';
 /**
  * The active model, served from the same objects the scorer evaluates.
  *
- * The how-it-works page renders from this endpoint rather than from prose, which is the only way to stop
- * user-facing documentation drifting away from the scoring. If a weight changes, the page changes with
- * it, and if a signal is added without a rationale it is visible immediately.
+ * The how-it-works page renders from these same registries rather than from prose, which is the only
+ * way to stop user-facing documentation drifting away from the scoring. If a weight changes, the page
+ * changes with it, and if a signal is added without a rationale it is visible immediately.
+ *
+ * The page imports them directly rather than fetching this endpoint, so it can stay statically
+ * rendered and cannot fail to build because a route did not answer. This serves the identical objects
+ * to anyone who wants them as data.
  */
 export const runtime = 'nodejs';
 

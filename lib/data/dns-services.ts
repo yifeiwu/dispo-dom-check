@@ -11,6 +11,8 @@
  * `lib/data/redirect-targets.ts`, and that path is still read.
  */
 
+import { isAtOrUnder } from '../hostname';
+
 const DKIM_PROVIDER_PATTERNS: readonly { pattern: string; provider: string }[] = [
   { pattern: 'onmicrosoft.com', provider: 'Microsoft 365' },
   { pattern: 'google.com', provider: 'Google Workspace' },
@@ -41,15 +43,6 @@ const DKIM_PROVIDER_PATTERNS: readonly { pattern: string; provider: string }[] =
  * signal it fed could no longer move a verdict either way.
  */
 
-function normaliseTarget(target: string): string {
-  return target.trim().replace(/\.$/, '').toLowerCase();
-}
-
-function suffixMatches(target: string, pattern: string): boolean {
-  return target === pattern || target.endsWith(`.${pattern}`);
-}
-
 export function classifyDkimProvider(target: string): string | undefined {
-  const normalised = normaliseTarget(target);
-  return DKIM_PROVIDER_PATTERNS.find(({ pattern }) => suffixMatches(normalised, pattern))?.provider;
+  return DKIM_PROVIDER_PATTERNS.find(({ pattern }) => isAtOrUnder(target, pattern))?.provider;
 }

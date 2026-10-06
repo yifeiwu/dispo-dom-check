@@ -45,7 +45,7 @@ import {
   isLegitimate,
   loadBenchmark,
 } from './benchmark.mts';
-import { reportBands, scoreAll, type Scored } from './audit/bands.mts';
+import { inLegitimateBand, inRiskBand, reportBands, scoreAll, type Scored } from './audit/bands.mts';
 import { loadCache } from './audit/cache.mts';
 import { collect, reparse } from './audit/collect.mts';
 import { buildFamilies } from './audit/families.mts';
@@ -141,14 +141,12 @@ const baselinePerDraw = draws.map((draw) => weightedAucOver(baselineScores, draw
  * ships bands, so a signal can be worth nothing to the ranking and still be holding domains on the right
  * side of a boundary, or the reverse.
  */
-const ACTIONABLE = new Set(['high_risk', 'suspicious']);
-const LEGITIMATE_BAND = new Set(['probably_legitimate', 'established']);
 function bandErrors(rowsIn: Scored[]): { falsePositives: number; falseNegatives: number } {
   let falsePositives = 0;
   let falseNegatives = 0;
   for (const row of rowsIn) {
-    if (row.legit && ACTIONABLE.has(row.verdict)) falsePositives += 1;
-    if (row.abuse && LEGITIMATE_BAND.has(row.verdict)) falseNegatives += 1;
+    if (row.legit && inRiskBand(row.verdict)) falsePositives += 1;
+    if (row.abuse && inLegitimateBand(row.verdict)) falseNegatives += 1;
   }
   return { falsePositives, falseNegatives };
 }
@@ -274,7 +272,13 @@ const SIGNAL_SOURCES: Record<string, string[]> = {
    * against, so a DNS failure and a mail failure both starve it.
    */
   'signup.disposable_token': ['dns', 'mail'],
+  // The only disposable detector fed by the site probe rather than the mail configuration, so it is the
+  // one that starves when a domain serves no page rather than when DNS fails.
+  'signup.disposable_declared': ['site'],
   'signup.free_routing': ['signup'],
+  // Reads `facts.signup.class` like the three entries around it. Added late: the signal shipped without
+  // a mapping, and since the guard below is fatal rather than advisory, the audit refused to run at all.
+  'signup.ambiguous_routing': ['signup'],
   'signup.forwarder': ['signup'],
   'signup.paid_tenant': ['signup'],
   /*
@@ -707,8 +711,8 @@ for (const knob of KNOBS) {
     cached.forEach((entry, position) => {
       const result = score(entry.facts, cfg);
       scores[position] = result.legitimacy;
-      if (isLegitimate(entry) && ACTIONABLE.has(result.verdict)) falsePositive[position] = 1;
-      if (isAbuse(entry) && LEGITIMATE_BAND.has(result.verdict)) falseNegative[position] = 1;
+      if (isLegitimate(entry) && inRiskBand(result.verdict)) falsePositive[position] = 1;
+      if (isAbuse(entry) && inLegitimateBand(result.verdict)) falseNegative[position] = 1;
     });
     scoresFor.set(value, scores);
     falsePositiveFor.set(value, falsePositive);

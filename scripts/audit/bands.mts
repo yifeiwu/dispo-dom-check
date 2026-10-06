@@ -2,7 +2,7 @@ import { DEFAULT_CONFIG } from '../../lib/scoring/weights';
 import { score } from '../../lib/scoring/score';
 import { isAbuse, isGraded, isLegitimate, orderedLabels, type Group } from '../benchmark.mts';
 import type { Cached } from './cache.mts';
-import { distribution } from './stats.mts';
+import { distribution, pct } from './stats.mts';
 
 /**
  * Does the model separate the labels, and are the band boundaries in the right place?
@@ -27,6 +27,24 @@ export type Scored = {
   abuse: boolean;
   legit: boolean;
 };
+
+/**
+ * The two band groupings every error count in either report is defined against.
+ *
+ * A legitimate domain in a risk band is the expensive error and an abuse domain in a legitimate band is
+ * the missed one, so both reports need the same two predicates. They had one copy each — a pair of
+ * `Set`s here, a pair of arrow functions in the ablation report — which meant a sixth verdict, or a
+ * decision about which side `unclear` falls on, had to be remembered in two files to stay one answer.
+ *
+ * `unclear`, `insufficient_evidence` and `out_of_scope` are in neither group deliberately. Each is the
+ * model declining to commit, and counting a declined verdict as either kind of error would measure the
+ * decision to withhold rather than a mistake about the domain.
+ */
+export const inRiskBand = (verdict: string): boolean =>
+  verdict === 'high_risk' || verdict === 'suspicious';
+
+export const inLegitimateBand = (verdict: string): boolean =>
+  verdict === 'probably_legitimate' || verdict === 'established';
 
 export function scoreAll(cached: readonly Cached[], exclude?: ReadonlySet<string>): Scored[] {
   return cached.map((entry) => {
@@ -93,7 +111,7 @@ export function reportBands(cached: readonly Cached[], scored: Scored[]): void {
     for (const row of rows) for (const name of row.flags) tally.set(name, (tally.get(name) ?? 0) + 1);
     const rendered = [...tally]
       .sort((a, b) => b[1] - a[1])
-      .map(([name, count]) => `${name}=${Math.round((count / rows.length) * 100)}%`)
+      .map(([name, count]) => `${name}=${pct(count / rows.length)}`)
       .join(' ');
     console.log(`${label.padEnd(14)} ${rendered || 'none'}${note(group)}`);
   }
@@ -102,18 +120,15 @@ export function reportBands(cached: readonly Cached[], scored: Scored[]): void {
   const legit = scored.filter((row) => row.legit);
   const ungraded = scored.filter((row) => !isGraded(row.entry));
 
-  const riskBand = (row: Scored) => row.verdict === 'high_risk' || row.verdict === 'suspicious';
-  const legitimateBand = (row: Scored) =>
-    row.verdict === 'probably_legitimate' || row.verdict === 'established';
   const share = (part: Scored[], whole: Scored[]) =>
-    whole.length === 0 ? '-' : `${Math.round((part.length / whole.length) * 100)}%`;
+    whole.length === 0 ? '-' : pct(part.length / whole.length);
 
   /*
    * The failures worth acting on. A legitimate domain scored as risky is the expensive error, because it
    * blocks a real user, so those are listed with their drivers to show which weight caused it.
    */
   console.log('\n=== False positives: legitimate domains landing in a risk band ===');
-  const falsePositives = legit.filter(riskBand);
+  const falsePositives = legit.filter((row) => inRiskBand(row.verdict));
   console.log(
     falsePositives.length === 0
       ? 'none'
@@ -124,7 +139,7 @@ export function reportBands(cached: readonly Cached[], scored: Scored[]): void {
   }
 
   console.log('\n=== False negatives: abuse domains landing in a legitimate band ===');
-  const falseNegatives = abuse.filter(legitimateBand);
+  const falseNegatives = abuse.filter((row) => inLegitimateBand(row.verdict));
   console.log(
     falseNegatives.length === 0
       ? 'none'
@@ -142,8 +157,8 @@ export function reportBands(cached: readonly Cached[], scored: Scored[]): void {
   if (ungraded.length > 0) {
     console.log('\n=== Privacy and forwarder domains: reported, never graded ===');
     console.log(
-      `${ungraded.length} scored: ${share(ungraded.filter(riskBand), ungraded)} in a risk band, ` +
-        `${share(ungraded.filter(legitimateBand), ungraded)} in a legitimate band. Neither counts as an ` +
+      `${ungraded.length} scored: ${share(ungraded.filter((row) => inRiskBand(row.verdict)), ungraded)} in a risk band, ` +
+        `${share(ungraded.filter((row) => inLegitimateBand(row.verdict)), ungraded)} in a legitimate band. Neither counts as an ` +
         `error, because the model flags this capability without ruling on it.`,
     );
   }

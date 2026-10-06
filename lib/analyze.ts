@@ -53,6 +53,22 @@ export type AnalysisOptions = {
    * `facts.sources` regardless of whether it is supplied.
    */
   onSource?: (status: SourceStatus) => void;
+  /**
+   * The instant this analysis is considered to have happened, defaulting to now.
+   *
+   * Exists for replay, and only the audit's `--reparse` passes it. Age, term length and time to expiry
+   * are all derived from `meta.analysedAt` rather than from a clock read at scoring time, so facts stay
+   * reproducible — but a replay rebuilds facts from responses captured weeks earlier, and reading the
+   * clock then dates August's observations as though they were taken today. The holdout ages while its
+   * evidence does not: domains drift towards expiry, and a signal gated on being very new stops firing
+   * because its subjects have simply got older.
+   *
+   * That turns a reparse, whose whole purpose is to isolate a collector change, into a measurement of
+   * the collector change plus however long the cache has been sitting there. Passing the transcript's
+   * `recordedAt` pins the clock to when the evidence was gathered, which is the only reading that makes
+   * the before and after comparable. The service never sets this: for a live analysis, now is correct.
+   */
+  analysedAt?: string;
 };
 
 /**
@@ -92,7 +108,7 @@ async function runAnalysis(
   options: AnalysisOptions,
 ): Promise<AnalysisResult> {
   const startedAt = Date.now();
-  const analysedAt = new Date().toISOString();
+  const analysedAt = options.analysedAt ?? new Date().toISOString();
 
   const remaining = () => Math.max(500, BUDGET.globalMs - (Date.now() - startedAt));
   const perSource = () => Math.min(BUDGET.perSourceMs, remaining());

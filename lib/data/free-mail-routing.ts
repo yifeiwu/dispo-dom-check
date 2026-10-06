@@ -32,11 +32,30 @@ export const FREE_MAIL_ROUTING_MX: readonly MxFingerprint[] = [
   },
   { provider: 'ImprovMX', patterns: ['improvmx.com'], note: 'free tier forwards any domain' },
   { provider: 'ForwardEmail', patterns: ['forwardemail.net'], note: 'free tier forwards any domain' },
-  { provider: 'Migadu', patterns: ['migadu.com'] },
-  { provider: 'Yandex Mail for Domain', patterns: ['mx.yandex.net', 'yandex.net', 'yandex.ru'] },
-  { provider: 'Purelymail', patterns: ['purelymail.com'] },
-  { provider: 'Mailfence', patterns: ['mailfence.com'] },
 ];
+
+/*
+ * Migadu, Yandex, Purelymail and Mailfence were here and are now in `AMBIGUOUS_MAIL_MX`.
+ *
+ * They were the four entries carrying no `note`, where the four that remain each state the basis of
+ * their membership, and the missing note was the finding rather than a formatting lapse: none of them
+ * offers the free unlimited custom-domain routing this table is defined by. Custom domains are a paid
+ * feature at Migadu, Purelymail and Mailfence, and Yandex closed its free domain tier to new users.
+ * That is the Porkbun test applied a second time — an entry that fails the criterion does not belong
+ * regardless of how much it looks like one — and this table carries the heaviest signup penalty plus
+ * the young-and-siteless conjunction, so an unevidenced member here is expensive.
+ *
+ * `PAID_MAIL_MX` was the obvious destination and was declined. The precedent there is StartMail, Titan
+ * and MXroute, admitted on having no free tier, and its stated criterion is spend per mailbox rather
+ * than how many addresses a mailbox answers to. These three fail that: Purelymail is a flat ten dollars
+ * a year for unlimited domains and unlimited addresses, and Migadu prices by message volume rather than
+ * by seat, so the marginal cost of the thousandth address is close enough to zero that crediting it as
+ * paid tenancy would hand a farm-friendly provider a bonus. Neither a penalty for free routing nor a
+ * credit for paid tenancy is defensible, which is exactly what the ambiguous class is for.
+ *
+ * Together they matched 2 of the 4,685 holdout domains, both abuse, so this is a false-positive
+ * exposure removed rather than a measured gain given up.
+ */
 
 /**
  * Mail exchangers that a free unlimited-alias product and a paid mailbox product share, so DNS cannot
@@ -53,6 +72,32 @@ export const AMBIGUOUS_MAIL_MX: readonly MxFingerprint[] = [
     provider: 'Zoho Mail',
     patterns: ['zoho.com', 'zoho.eu', 'zohomail.com'],
     note: 'free and paid tiers share mail exchangers and cannot be distinguished from DNS',
+  },
+  /*
+   * The four that moved out of `FREE_MAIL_ROUTING_MX`. Zoho is here because its free and paid tiers are
+   * indistinguishable; these are here for the adjacent reason that they are cheap and unmetered per
+   * address without being free, so neither the free-routing penalty nor the paid-tenancy credit tells
+   * the truth about them. Each note now states what the old entries left unstated.
+   */
+  {
+    provider: 'Migadu',
+    patterns: ['migadu.com'],
+    note: 'paid only, but priced by message volume rather than per mailbox, so addresses are unmetered',
+  },
+  {
+    provider: 'Yandex Mail for Domain',
+    patterns: ['mx.yandex.net', 'yandex.net', 'yandex.ru'],
+    note: 'free domain tier closed to new users, so a match may be grandfathered free or paid',
+  },
+  {
+    provider: 'Purelymail',
+    patterns: ['purelymail.com'],
+    note: 'paid only, at a flat yearly fee for unlimited domains and unlimited addresses',
+  },
+  {
+    provider: 'Mailfence',
+    patterns: ['mailfence.com'],
+    note: 'custom domains require a paid plan, while the free tier is mailfence.com addresses only',
   },
 ];
 
@@ -148,7 +193,16 @@ export const PAID_MAIL_MX: readonly MxFingerprint[] = [
  * provider with many unrelated users, and scoring it as one organisation's domain is as meaningless as
  * scoring the provider's main domain.
  *
- * A match routes the analysis to `out_of_scope: shared_free_provider` rather than applying a penalty.
+ * A match withholds the verdict as `out_of_scope` rather than applying a penalty, which is the same
+ * answer `lib/domain.ts` gives for a provider's main domain before any network work happens.
+ *
+ * It is worth knowing that this comment described that outcome for three versions while nothing
+ * implemented it. The class was set here, checked before the paid table so a provider's vanity domain
+ * would not score as a paying business tenant, and then read by nothing at all: not a signal, not an
+ * observation, not a flag. The suppression was real and the routing was not, so all 19 holdout domains
+ * in the class were scored as ordinary businesses and 15 of them came out `unclear` — a number in the
+ * middle of the range, about a mailbox shared by millions. `lib/scoring/verdict.ts` now carries the
+ * decision and `lib/scoring/score.ts` the predicate.
  */
 export const CONSUMER_MAIL_INFRASTRUCTURE_MX: readonly MxFingerprint[] = [
   { provider: 'GMX / Mail & Media', patterns: ['gmx.net', 'gmx.com', 'gmx.de'] },

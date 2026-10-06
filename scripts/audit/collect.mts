@@ -110,10 +110,17 @@ export async function collect(rows: Row[], concurrency: number): Promise<void> {
  * Rebuilds the facts by running the current collectors against the stored responses. This is the answer
  * to a parser change: no network, and every domain sees exactly what it saw during collection.
  *
- * Two things a replayed run cannot recover, both reported rather than hidden. A request the new code
- * makes that the recording never saw has no answer and is counted as a miss. And anything measured
- * against the clock, registration age above all, is computed from today rather than from the day the
- * response was captured, so an old transcript ages its domains along with it.
+ * One thing a replayed run cannot recover, reported rather than hidden: a request the new code makes
+ * that the recording never saw has no answer and is counted as a miss.
+ *
+ * It used to be two. Anything measured against the clock was computed from today rather than from the
+ * day the response was captured, so an old transcript aged its domains along with it — and that was
+ * written up as a limitation of replay when it was really just a clock being read in the wrong place.
+ * On a seven-week-old cache it moved baseline AUC by 0.004, added 55 abuse domains to a legitimate
+ * band, and took `site.no_address_when_young` from 194 families to none, because the domains it gates
+ * on being very new were no longer very new. None of that was a collector change, which is the only
+ * thing this phase exists to show. The transcript records when it was captured, so the clock is pinned
+ * to `recordedAt` and a reparse is now comparable with the collection it replaces.
  */
 export async function reparse(rows: Row[], concurrency: number): Promise<void> {
   const shared = readSharedRaw();
@@ -142,7 +149,10 @@ export async function reparse(rows: Row[], concurrency: number): Promise<void> {
       const input = normaliseInput(row.domain);
       if (input.kind !== 'ok') return;
       const transcript = readRaw(row.domain);
-      const { value, misses } = await withHttpReplay([transcript, shared], () => analyze(input));
+      // Clock pinned to the capture, so this phase reports the collector change and nothing else.
+      const { value, misses } = await withHttpReplay([transcript, shared], () =>
+        analyze(input, { analysedAt: transcript?.recordedAt }),
+      );
       if (misses.length > 0) {
         missed += misses.length;
         if (missedDomains.length < 5) missedDomains.push(row.domain);

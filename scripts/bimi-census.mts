@@ -18,6 +18,7 @@
  * reports a number that goes into `docs/CALIBRATION.md` and into the decision recorded there.
  */
 import { loadBenchmark, type Group, type Row } from './benchmark.mts';
+import { pool } from './cli.mts';
 import { txtAt } from '../lib/collect/dns';
 import { parseBimiRecord } from '../lib/bimi-vmc';
 
@@ -57,23 +58,17 @@ async function censusOne(row: Row): Promise<Finding | null> {
 
 async function main(): Promise<void> {
   const rows = loadBenchmark();
-  const findings: Finding[] = [];
   const totals = new Map<Group, number>();
   for (const row of rows) totals.set(row.group, (totals.get(row.group) ?? 0) + 1);
 
-  let done = 0;
-  const queue = [...rows];
-  const workers = Array.from({ length: CONCURRENCY }, async () => {
-    for (;;) {
-      const row = queue.shift();
-      if (!row) return;
-      const finding = await censusOne(row);
-      if (finding) findings.push(finding);
-      done += 1;
-      if (done % 250 === 0) process.stderr.write(`  ${done}/${rows.length}\n`);
-    }
-  });
-  await Promise.all(workers);
+  // The shared pool rather than a fourth hand-rolled one. This had its own cursor-and-queue loop with
+  // progress every 250 domains; `pool` throttles by time instead, which is the behaviour the audit
+  // scripts already have, and it collects failures rather than letting one reject a worker.
+  const { results, failures } = await pool(rows, CONCURRENCY, censusOne, 'queried');
+  const findings = results.filter((finding): finding is Finding => finding !== null);
+  if (failures.length > 0) {
+    process.stderr.write(`  ${failures.length} domains failed outright and are counted in neither column\n`);
+  }
 
   const byGroup = new Map<Group, Finding[]>();
   for (const finding of findings) {

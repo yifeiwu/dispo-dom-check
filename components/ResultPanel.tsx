@@ -18,8 +18,13 @@ export function OutOfScopePanel({
   pending: boolean;
 }) {
   return (
+    // `aria-busy` alongside `inert` for the same reason `ResultPanel` carries both: dimming and
+    // inerting tell a sighted or keyboard reader the card is stale, and this tells everyone else. It
+    // was missing on this branch only, so the out-of-scope verdict was the one result that went quiet
+    // while it refreshed.
     <section
       className={`rise space-y-3 rounded-xl border border-edge bg-surface-raised p-5 ${veil}`}
+      aria-busy={pending}
       inert={pending}
     >
       <div className="flex flex-wrap items-baseline gap-3">

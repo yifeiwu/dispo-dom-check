@@ -38,6 +38,16 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
+/**
+ * Nearest-rank percentile over an already-sorted array.
+ *
+ * `fraction * (n - 1)` rounded, so 0 and 1 land exactly on the first and last observation.
+ *
+ * `distribution` below had its own index, `floor(n * fraction)`, which is a different estimator rather
+ * than a different spelling of this one. On a hundred observations it read element 90 for p90 where this
+ * reads 89, and the gap widens with n: the two agreed only where the arithmetic happened to coincide.
+ * Both were printed in the same report under the same label, so the report quoted two p90s as one.
+ */
 export function percentile(sorted: number[], fraction: number): number {
   if (sorted.length === 0) return NaN;
   const at = Math.min(sorted.length - 1, Math.max(0, Math.round(fraction * (sorted.length - 1))));
@@ -48,13 +58,12 @@ export function distribution(
   values: number[],
 ): { n: number; median: number; mean: number; p10: number; p90: number } {
   const sorted = [...values].sort((a, b) => a - b);
-  const at = (fraction: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))];
   return {
     n: sorted.length,
-    median: sorted.length ? at(0.5) : NaN,
+    median: percentile(sorted, 0.5),
     mean: sorted.length ? Math.round((sorted.reduce((a, b) => a + b, 0) / sorted.length) * 10) / 10 : NaN,
-    p10: sorted.length ? at(0.1) : NaN,
-    p90: sorted.length ? at(0.9) : NaN,
+    p10: percentile(sorted, 0.1),
+    p90: percentile(sorted, 0.9),
   };
 }
 

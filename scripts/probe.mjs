@@ -35,10 +35,14 @@ for (const input of inputs) {
   for (const dimension of result.dimensions.filter((d) => d.clamped !== 0)) {
     console.log(`  [${dimension.dimension}] ${dimension.clamped}${dimension.clampApplied ? ' (clamped)' : ''}`);
   }
+  // The same signed form `lib/format.ts` uses, inlined because this file is plain `.mjs` and runs on
+  // bare node without the TypeScript loader the `.mts` scripts get. Applied to combinations too: they
+  // print in the same column as the signals, and a bare `4` under a `-8` read as a magnitude.
+  const signed = (points) => `${points > 0 ? '+' : ''}${points}`;
   for (const signal of result.signals) {
-    console.log(`  ${signal.points > 0 ? '+' : ''}${signal.points}\t${signal.id}\t${signal.evidence}`);
+    console.log(`  ${signed(signal.points)}\t${signal.id}\t${signal.evidence}`);
   }
   for (const combination of result.combinations) {
-    console.log(`  combo ${combination.points}\t${combination.id}\t${combination.evidence}`);
+    console.log(`  combo ${signed(combination.points)}\t${combination.id}\t${combination.evidence}`);
   }
 }

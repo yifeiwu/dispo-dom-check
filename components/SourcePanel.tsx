@@ -1,6 +1,7 @@
-import { SOURCE_LABELS, SOURCE_ORDER, STATUS_LABELS } from '@/lib/api-types';
-import type { SourceId } from '@/lib/collector';
+import { SOURCE_ORDER, sourceLabel, statusLabel } from '@/lib/api-types';
+import type { CollectorStatus, SourceId } from '@/lib/collector';
 import type { SourceStatus } from '@/lib/facts';
+import { isRegistrationSource, pickRegistration, registrationIn } from '@/lib/registration-source';
 
 /**
  * What the score was and was not based on.
@@ -13,50 +14,42 @@ import type { SourceStatus } from '@/lib/facts';
  * source settles. One vocabulary for both: a source that timed out should not be described one way at
  * three seconds and another way at eight.
  */
-const STATUS_TONE: Record<string, string> = {
-  ok: 'text-accent',
-  timeout: 'text-warn',
-  rate_limited: 'text-warn',
-  unavailable: 'text-danger',
-  unsupported: 'text-ink-faint',
-  skipped: 'text-ink-faint',
+/**
+ * One row per status rather than two parallel tables, which is how `ScoreGauge` already holds the
+ * verdict colours. The dot and the word beside it describe the same status, so keeping them in
+ * separate maps meant six pairs that had to be kept agreeing by hand and nothing that would notice if
+ * one of them stopped. Written out rather than derived, because Tailwind only sees class names that
+ * appear literally in the source.
+ */
+const TONE: Record<CollectorStatus, { text: string; dot: string }> = {
+  ok: { text: 'text-accent', dot: 'bg-accent' },
+  timeout: { text: 'text-warn', dot: 'bg-warn' },
+  rate_limited: { text: 'text-warn', dot: 'bg-warn' },
+  unavailable: { text: 'text-danger', dot: 'bg-danger' },
+  unsupported: { text: 'text-ink-faint', dot: 'bg-ink-faint' },
+  skipped: { text: 'text-ink-faint', dot: 'bg-ink-faint' },
 };
 
-const DOT_TONE: Record<string, string> = {
-  ok: 'bg-accent',
-  timeout: 'bg-warn',
-  rate_limited: 'bg-warn',
-  unavailable: 'bg-danger',
-  unsupported: 'bg-ink-faint',
-  skipped: 'bg-ink-faint',
-};
+const NEUTRAL = { text: '', dot: 'bg-ink-faint' };
+
+/** Whatever a payload carried, which is not guaranteed to be a status this build knows about. */
+const toneFor = (status: CollectorStatus): { text: string; dot: string } =>
+  (TONE as Record<string, { text: string; dot: string } | undefined>)[status] ?? NEUTRAL;
 
 const ROW = 'grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 py-2 sm:grid-cols-[13rem_7rem_minmax(0,1fr)]';
 const DETAIL = 'col-span-2 min-w-0 text-xs text-ink-faint sm:col-span-1';
 
-const isRegistration = (source: SourceId): boolean => source === 'rdap' || source === 'whois';
-
 /**
  * RDAP and WHOIS are two transports for the same record. Listing both makes a `.com` whose RDAP
- * answered look as though the registration record was also skipped. Show the one that actually spoke,
- * and wait until that is known rather than drawing a second row that will vanish.
+ * answered look as though the registration record was also skipped, so only the one that actually
+ * spoke is drawn. Choosing which that is lives in `lib/registration-source.ts`, shared with the
+ * narrative, which has to collapse the same pair and must not reach a different answer.
  */
-function pickRegistration(rdap?: SourceStatus, whois?: SourceStatus): SourceStatus | undefined {
-  if (rdap?.status === 'ok') return rdap;
-  if (whois?.status === 'ok') return whois;
-  if (rdap && whois) return rdap.status !== 'skipped' ? rdap : whois.status !== 'skipped' ? whois : rdap;
-  return undefined;
-}
-
 function collapseRegistration(sources: SourceStatus[]): SourceStatus[] {
-  const registration = sources.filter((source) => isRegistration(source.source));
+  const registration = sources.filter((source) => isRegistrationSource(source.source));
   if (registration.length <= 1) return sources;
-  const shown =
-    pickRegistration(
-      registration.find((source) => source.source === 'rdap'),
-      registration.find((source) => source.source === 'whois'),
-    ) ?? registration[0];
-  return sources.filter((source) => !isRegistration(source.source) || source === shown);
+  const shown = registrationIn(sources) ?? registration[0];
+  return sources.filter((source) => !isRegistrationSource(source.source) || source === shown);
 }
 
 /**
@@ -66,7 +59,7 @@ function collapseRegistration(sources: SourceStatus[]): SourceStatus[] {
 const SOURCE_DISPLAY_ORDER: Array<SourceId | 'registration'> = SOURCE_ORDER.reduce<
   Array<SourceId | 'registration'>
 >((order, source) => {
-  if (isRegistration(source)) {
+  if (isRegistrationSource(source)) {
     if (!order.includes('registration')) order.push('registration');
   } else {
     order.push(source);
@@ -97,7 +90,7 @@ function SourceRow({
           <span
             aria-hidden
             className={`h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full ${
-              status ? DOT_TONE[status.status] ?? 'bg-ink-faint' : 'animate-pulse bg-ink-faint'
+              status ? toneFor(status.status).dot : 'animate-pulse bg-ink-faint'
             }`}
           />
         ) : null}
@@ -105,8 +98,8 @@ function SourceRow({
             a source panel whose whole purpose is saying what answered cannot elide which source. */}
         <span>{label}</span>
       </span>
-      <span className={`text-right sm:text-left ${status ? STATUS_TONE[status.status] ?? '' : 'text-ink-faint'}`}>
-        {status ? STATUS_LABELS[status.status] ?? status.status : 'Waiting'}
+      <span className={`text-right sm:text-left ${status ? toneFor(status.status).text : 'text-ink-faint'}`}>
+        {status ? statusLabel(status.status) : 'Waiting'}
       </span>
       <span className={DETAIL}>{sourceDetail(status)}</span>
     </li>
@@ -119,7 +112,7 @@ export function SourcePanel({ sources }: { sources: SourceStatus[] }) {
       {collapseRegistration(sources).map((source) => (
         <SourceRow
           key={source.source}
-          label={SOURCE_LABELS[source.source] ?? source.source}
+          label={sourceLabel(source.source)}
           status={source}
         />
       ))}
@@ -146,7 +139,7 @@ export function SourceProgress({ settled }: { settled: SourceStatus[] }) {
           return (
             <SourceRow
               key="registration"
-              label={status ? (SOURCE_LABELS[status.source] ?? status.source) : 'Registration record'}
+              label={status ? sourceLabel(status.source) : 'Registration record'}
               status={status}
               showDot
             />
@@ -156,7 +149,7 @@ export function SourceProgress({ settled }: { settled: SourceStatus[] }) {
         return (
           <SourceRow
             key={source}
-            label={SOURCE_LABELS[source] ?? source}
+            label={sourceLabel(source)}
             status={byId.get(source)}
             showDot
           />

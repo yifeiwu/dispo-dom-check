@@ -1,58 +1,51 @@
 import type { ScoringConfig, Verdict } from './weights';
 
 /**
- * Band assignment, plus the one rule that overrules every band.
+ * Band assignment, plus the two rules that overrule every band.
  *
  * Low confidence must not be allowed to produce a confident-looking verdict. A legitimate new small
  * business and a fresh farm domain look alike, so when coverage is thin the honest answer is that there
  * is not enough evidence, not a number in the middle of the range that a consumer might act on.
+ *
+ * `sharedMailProvider` outranks even that, because it is not a statement about how much was learned but
+ * about whether the question applies. A domain whose mail is handled by a consumer provider's own
+ * infrastructure is a mailbox shared by a very large number of unrelated people, and every number this
+ * model produces describes one organisation's domain. Scoring it is as meaningless as scoring the
+ * provider's main name, which `lib/domain.ts` has always declined to do — the difference is only that
+ * the gate there reads a hardcoded list of provider domains before any network work, and a list of
+ * those can never be complete, because the providers operate hundreds of vanity domains apiece.
+ * `CONSUMER_MAIL_INFRASTRUCTURE_MX` is the generic form of the same test, and this is where its answer
+ * finally lands.
+ *
+ * The score, the signals and the sources all survive it. Declining to give a verdict is not declining
+ * to show the evidence, and a reader who disagrees that a domain is a shared provider needs to see what
+ * was observed in order to say so.
  */
-export function verdictFor(legitimacy: number, confidence: number, cfg: ScoringConfig): Verdict {
+export function verdictFor(
+  legitimacy: number,
+  confidence: number,
+  cfg: ScoringConfig,
+  sharedMailProvider = false,
+): Verdict {
+  if (sharedMailProvider) return 'out_of_scope';
   if (confidence < cfg.confidence.insufficientThreshold) return 'insufficient_evidence';
 
   const band = cfg.verdictBands.find((entry) => legitimacy <= entry.maxScore);
   return band?.verdict ?? 'unclear';
 }
 
-/** Where a score sits inside the band it landed in, and what is on the other side of the nearer edge. */
-export type BandPosition = {
-  min: number;
-  max: number;
-  /** Absent only where the band has no neighbour on either side, which no configured band has. */
-  nearest?: { verdict: Verdict; distance: number; direction: 'below' | 'above' };
-};
-
-/**
- * The band boundaries either side of a score, and which edge it is closer to.
+/*
+ * There was a `bandPosition` here, reporting where in its band a score landed and how far it sat from
+ * the nearer edge, on the argument that 55 and 69 are both "Probably legitimate" and mean different
+ * things. The gauge that rendered it was reduced to the score and the band name, and nothing has
+ * called this since. It is in the history rather than here, because a scoring helper nothing scores
+ * with is indistinguishable from one that is quietly wrong: no fixture pins it and no test would
+ * notice if a band edge moved underneath it.
  *
- * A band is a range, and reporting only its name throws away where in that range the domain landed:
- * 55 and 69 are both "Probably legitimate" and mean quite different things, while a 40 is one point
- * from being called "Unclear" instead. Anyone deciding how much friction to put in front of a signup
- * is better served knowing the score is marginal than knowing which side of a boundary it fell.
- *
- * Withheld and out-of-scope verdicts have no band to be positioned in and return nothing rather than
- * an invented one.
+ * The argument for it is still good. If the gauge regains a marginality indicator, restore it with a
+ * test attached. `how-it-works` computes the same edges inline for its verdict table, which is the
+ * one live reader of that arithmetic.
  */
-export function bandPosition(legitimacy: number, cfg: ScoringConfig): BandPosition | undefined {
-  const index = cfg.verdictBands.findIndex((entry) => legitimacy <= entry.maxScore);
-  if (index === -1) return undefined;
-
-  const min = index === 0 ? 0 : cfg.verdictBands[index - 1].maxScore + 1;
-  const max = cfg.verdictBands[index].maxScore;
-
-  const below = index === 0 ? undefined : cfg.verdictBands[index - 1];
-  const above = cfg.verdictBands[index + 1];
-
-  const candidates = [
-    below && { verdict: below.verdict, distance: legitimacy - min + 1, direction: 'below' as const },
-    above && { verdict: above.verdict, distance: max - legitimacy + 1, direction: 'above' as const },
-  ].filter((entry) => entry !== undefined);
-
-  // Ties go to the lower edge, which is the direction a reader adding friction cares about.
-  const nearest = candidates.sort((a, b) => a.distance - b.distance)[0];
-
-  return { min, max, nearest };
-}
 
 export const VERDICT_LABELS: Record<Verdict, string> = {
   high_risk: 'High risk',

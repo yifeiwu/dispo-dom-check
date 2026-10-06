@@ -1,3 +1,5 @@
+import { isAtOrUnder } from '../hostname';
+
 /**
  * Suffixes where the name under them was issued by a platform rather than registered at a registry.
  *
@@ -117,10 +119,9 @@ export const PROVIDER_SUFFIXES: readonly ProviderSuffix[] = [
  * two-label one.
  */
 export function matchProviderSuffix(host: string): ProviderSuffix | null {
-  const normalised = host.toLowerCase().replace(/\.$/, '');
   let best: ProviderSuffix | null = null;
   for (const entry of PROVIDER_SUFFIXES) {
-    if (normalised === entry.suffix || normalised.endsWith(`.${entry.suffix}`)) {
+    if (isAtOrUnder(host, entry.suffix)) {
       if (!best || entry.suffix.length > best.suffix.length) best = entry;
     }
   }

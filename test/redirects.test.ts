@@ -3,6 +3,7 @@ import { collectSite } from '@/lib/collect/site';
 import { BUDGET } from '@/lib/budget';
 import { probe } from '@/lib/fetch';
 import { BlockedHostError } from '@/lib/errors';
+import { matchParkingNameserver } from '@/lib/data/parking-ns';
 import { page, redirectTo, restoreFetchBetweenTests, stubNetwork } from './helpers/network';
 
 /**
@@ -191,5 +192,46 @@ describe('site collector on a refused redirect', () => {
 
     expect(site.parked).toBe(true);
     expect(site.parkingEvidence).toMatch(/parking/i);
+  });
+});
+
+/**
+ * Parking is the heaviest penalty the site dimension can apply, and delegation is the route to it that
+ * needs no fetch, so what counts as a match matters more here than anywhere else in the table.
+ *
+ * These pin the suffix rule against the substring test this used to do. `ns.includes('dan.com')` is
+ * true of `ns1.jordan.com`, which parked a legitimate domain at -12, flagged it, and made it eligible
+ * for a further -8 from `combo.parked_with_mx`.
+ */
+describe('parking nameserver matching', () => {
+  it('matches a nameserver under a parking operator', () => {
+    expect(matchParkingNameserver(['ns1.parkingcrew.net'])?.provider).toBe('ParkingCrew');
+    expect(matchParkingNameserver(['NS2.ParkingCrew.NET.'])?.provider).toBe('ParkingCrew');
+  });
+
+  it('matches the operator apex itself, not only names beneath it', () => {
+    expect(matchParkingNameserver(['bodis.com'])?.provider).toBe('Bodis');
+  });
+
+  it('does not match a nameserver that merely contains the pattern', () => {
+    expect(matchParkingNameserver(['ns1.jordan.com'])).toBeUndefined();
+    expect(matchParkingNameserver(['ns1.sudan.com'])).toBeUndefined();
+    expect(matchParkingNameserver(['ns1.above.community'])).toBeUndefined();
+  });
+
+  /**
+   * Three entries end in `.parked` or `.park`, which no real nameserver does. They read as entries
+   * neutralised rather than deleted, because the bare forms are each an operator's ordinary
+   * delegation — matching those would park every domain at GoDaddy, Namecheap and NS1.
+   */
+  it('leaves the ordinary delegation of registrars that also park alone', () => {
+    expect(matchParkingNameserver(['ns1.domaincontrol.com'])).toBeUndefined();
+    expect(matchParkingNameserver(['dns1.registrar-servers.com'])).toBeUndefined();
+    expect(matchParkingNameserver(['dns1.p01.nsone.net'])).toBeUndefined();
+  });
+
+  it('reports nothing for a zone with no nameservers observed', () => {
+    expect(matchParkingNameserver(undefined)).toBeUndefined();
+    expect(matchParkingNameserver([])).toBeUndefined();
   });
 });

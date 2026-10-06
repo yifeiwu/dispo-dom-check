@@ -97,7 +97,7 @@ lib/analyze.ts       orchestration, and where the never-block contract is enforc
 lib/scoring/*.ts     pure scoring over facts plus config
 app/api/analyze      the endpoint, always 200 with whatever was collected
 app/api/model        the live config and every rationale, as data
-app/how-it-works     the explanation page, rendered from /api/model
+app/how-it-works     the explanation page, rendered from the same registries
 components/*.tsx     the result views: gauge, dimensions, signals, sources
 ```
 

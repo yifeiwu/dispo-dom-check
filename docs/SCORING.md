@@ -1,6 +1,6 @@
 # Scoring model
 
-Model version: `1.7.0`
+Model version: `1.10.0`
 
 This document is the reasoning, not the numbers. The implementation lives in
 [`lib/scoring/weights.ts`](../lib/scoring/weights.ts), which is the single place any weight,
@@ -119,6 +119,21 @@ is the entire reason the exception is affordable at this size and would not be a
 The vendor's `block`, `valid` and `is_email_forwarder` fields are shown as evidence and never scored;
 `docs/SOURCES.md` records which rejected judgement each one would reintroduce.
 
+The paid-tenancy credit is matched only against the exchangers a sender will actually try, which is
+the lowest `priority` value and every host tied at it. Before `1.8.0` the table was scanned across the
+whole MX set, so a backup exchanger nobody delivers to bought the credit outright while the real
+mailbox sat in front of it. Four holdout domains were in that shape — three abuse, one an in-zone
+catch-all with `smtp.google.com` listed behind it — and the second-order effect was worse than the six
+points, because matching the paid table also set `selfHosted: false` and so skipped the in-zone
+inspection that would have examined the exchanger actually receiving the mail. Only the credit is
+restricted this way. Every penalty table still reads the whole set, which is the right asymmetry: a
+temp-mail exchanger listed anywhere is a mailbox that can be reached, while a paid tenancy mail never
+arrives at evidences no spend on anything.
+
+The known residual exposure is Google's `_dc-mx.<hex>` domain-verification record, which sits at
+priority 0 and would cost a genuine Workspace customer the credit. One holdout domain has it, and it
+is abuse.
+
 Three rows added in `1.5.0` exist because the throwaway-inbox fingerprint was measured and found to match
 **none of the 123 holdout rows labelled `DISPOSABLE`**. That gap is structural rather than a short table.
 The services in question sell custom domains, and their setup instructions tell the customer to publish a
@@ -186,6 +201,24 @@ unit-cost claim the threat model rests on, and never that this registrant paid l
 The ratio matters because abusers pay only the first year, so a registry discounting year one heavily
 is selling disposability. It applies only inside the first registration year, since a renewed domain
 has already paid the real price.
+
+The inference needs one more thing to hold, added in `1.8.0`: the price has to be the whole barrier. A
+registry that demands an enforced presence in its territory is charged nothing however cheaply it
+lists, because what stood between an operator and ten thousand names there was never the money. `.de`
+is the clearest case and the most expensive mistake. DENIC sells it at about $2.90, which is the
+second-deepest tier at -8, and also requires a German administrative contact it will delete the domain
+for failing — so the namespace is cheap and closed at the same time. The holdout has 18 legitimate `.de`
+domains against 4 abuse ones, and 17 of the 18 scored exactly 50, because the -8 cancelled the +8 the
+same domains earned for record breadth while DENIC publishes no creation date for the age signal to
+work with. The exemption covers Nominet's four namespaces, EURid, AFNIC, CIRA and the others listed in
+[`lib/data/presence-required-suffixes.ts`](../lib/data/presence-required-suffixes.ts).
+
+The criterion is enforcement, not geography, and the line is drawn by whether anybody checks. `.us`
+has a nexus policy and is excluded from the exemption, because the policy is self-certified at
+registration and nothing verifies it; the holdout carries 33 abuse domains under `.us` and not one
+legitimate domain. `.nl`, `.be`, `.ch`, `.at`, `.se`, `.pl` and `.es` ask for nothing and are likewise
+excluded. The exemption also governs the cheapness term in `combo.farm_profile`, since a registry that
+is not a disposal route is not one for the conjunction either.
 
 The price list is a single registrar's catalogue, so it describes the mainstream retail market rather
 than every suffix in existence. No price is inferred for a suffix it does not carry. The parent suffix
@@ -312,7 +345,26 @@ ordinary mail-only setup rather than a farm.
 This is the one clamp positioned by measurement rather than by what its signals can reach, and it binds:
 the dimension can produce +12. The two credits overlap, since the domain with wide record breadth is
 usually also the one whose title matches its own label, so the pair pays twice for a single underlying
-fact. Bounding the sum was preferred to repricing either signal, because each is well-behaved alone.
+fact. Bounding the sum was preferred to repricing either signal, because each is well-behaved alone. It
+was 10 through `1.7.0` and is 6 from `1.8.0`. The bound moved because what it bounds got cleaner
+rather than because the objective changed, and [`CALIBRATION.md`](CALIBRATION.md) records why. The
+sweep picks 4 and 4 is not what ships: its objective counts only actionable-band false positives, so
+it cannot see the thirteen legitimate domains that fall into `unclear` between 6 and 4. The full curve
+is in [`weights.ts`](../lib/scoring/weights.ts). Six is close enough to a single credit that it is
+worth saying what survives: either credit alone still pays in full, and only the sum is cut. Both are
+facts the domain asserts about itself — it publishes its own records and writes its own title — and
+the verification rule this model rests on says self-asserted evidence may corroborate but should never
+accumulate.
+
+Neither the credit nor the penalty applies to a name issued under a platform's own suffix, which is new
+in `1.8.0`. Microsoft publishes the `onmicrosoft.com` zone, not its tenants, so a tenancy carries mail
+records and nothing else as a matter of construction — there is no action the holder could take to
+avoid the mail-only penalty, and no breadth they could earn the credit with. All nine such domains in
+the holdout paid the -10, six legitimate and three abuse, and every one of them landed in `unclear` at
+41 to 46. A penalty that fires on every member of a population measures nothing about any member of
+it, which is the objection that removed `footprint.dnssec`; the difference is that this one is
+structural rather than merely observed, so no better collection can overturn it. What decides is who
+publishes the zone rather than what the tenancy costs.
 
 ### Organisational footprint, removed in 1.5.0
 
@@ -380,6 +432,144 @@ nothing, in either direction.
 Soft 404s are detected by status code rather than body size, because a large custom error page is
 otherwise indistinguishable from a real one.
 
+#### The shopfront a disposable service cannot hide
+
+Every disposable detector before `1.10.0` identifies a *customer* of a throwaway-inbox service: an
+exchanger belonging to one, an exchanger resolving into one's address pool, an ownership token published
+for one. A provider's own domain routes mail to its own infrastructure and publishes nothing on anyone
+else's behalf, so it is invisible to all three — and it looks like the real business it is, because it
+genuinely has the age, the DNS records and the working website those facts credit.
+
+That gap was measured rather than supposed. Across the 123 domains the holdout labels disposable and the
+58 it labels privacy, those three signals fire on **none**. The provider domains among them score as
+high as 82 and `established`. Whatever is catching the other 105 is generic risk — young, cheap suffix,
+no site — not disposable detection.
+
+What a service selling throwaway inboxes cannot hide is that it has to be *found* by the people who want
+one, so it advertises the product in its page title. The site probe already has that title, so this
+costs no request. It is a penalty, so the `1.3.0` rule confining credits to third-party confirmation
+does not reach it, on the same reasoning recorded at `signup.disposable_token`: a domain that titles its
+homepage "Temp Mail" has minted nothing, it has said what it sells.
+
+**Only the title is matched, and only phrases that name the product qualify.** Both halves of that are
+the same guard. The obvious way for this to misfire is on a page written *about* disposable mail — an
+anti-abuse vendor, a validation API, a security blog — and such a page discusses the topic in prose
+while titling itself something else. Across every stored page, title matching hit 43: 41 abuse, one
+disposable, one privacy, and no legitimate page at all. Extending the same phrases to the body hit 116
+pages and tripled the abuse domains pulled out of a legitimate band, and cost a legitimate one. It is
+not shipped; see [`docs/CALIBRATION.md`](./CALIBRATION.md).
+
+The phrase list is in [`lib/data/disposable-fingerprints.ts`](../lib/data/disposable-fingerprints.ts)
+with its rejections, which are where the criterion is visible. A bare `temporary email` is excluded for
+hitting `atomicmail.io` and `silomails.com`, while `temporary email service` and `temporary email
+address` are included: the first is a subject, the second two are a product's name. `email alias` and
+its plural are excluded outright, because an alias forwarder is a legitimate privacy practice this model
+flags for the consumer rather than condemns, and `mycloaked.id` and `passmail.net` are who would pay.
+`fake email` was clean on this holdout and still refused, being what an email-*validation* vendor would
+title a page.
+
+#### Separating "is this real" from "does it mint throwaway addresses"
+
+The additive model asks one question — how much has been invested in this domain — and had been
+arbitrating disposable addressing on the same axis, where it loses. `6po.net` takes the full -40 for free
+routing and is handed back +16 for age, record breadth and a substantive site, landing at 45 and
+`unclear`. `use.startmail.com` reaches 82 and `established` on +20 age, +8 records and a paid tenancy.
+Neither score is wrong about what it measures, and both verdicts are useless.
+
+So `overrides.disposableCap` makes the second question dispositive: a domain confirmed to hand out
+disposable addresses is capped at 18, the top of `high_risk`, whatever else it has built. This is not a
+new principle. `overrides.registryHoldCap` is the same construction, and the verdict layer already
+routes a shared consumer provider straight to `out_of_scope` on the reasoning that what matters is not
+how much was learned but whether the question applies. A disposable provider is that insight pointed the
+other way: domain-level analysis of one is not uninformative but conclusive, because every mailbox under
+it is throwaway by construction.
+
+It is a ceiling and not an assignment, so a domain already scoring lower keeps its score and the
+ordering inside the capped set survives. Only the dispositive signals trigger it — the two temp-mail
+routing fingerprints, the ownership token, the self-declared title, and a Check-Mail *disposable*
+verdict specifically. Free routing, alias forwarding, wildcard mail and ambiguous routing are all
+excluded, and that is the load-bearing distinction rather than a detail: each fires on ordinary small
+domains, free routing is how a great many one-person businesses receive mail, and capping on them would
+make the model's stated policy on forwarders false in code.
+
+#### A website, not a page
+
+Through `1.8.0` the content credit asked for an HTTPS 200, a title and five hundred characters of
+readable text. That describes an account farm's landing page exactly as well as a small business's
+homepage, and the holdout says so: **200 of the 467 abuse pages earning the credit had no internal
+link at all**, against 5 of 72 legitimate ones. From `1.9.0` the page must also offer somewhere else
+to go on the same domain — an about page, a contact page, a product list — which is the difference
+between a website and a page.
+
+The count is of distinct same-domain paths rather than anchors, read from the response already
+fetched, so it costs no request. A navigation bar repeated in a header and a footer is one destination
+listed twice; a parking page's grid of twenty sponsored links is twenty anchors to somebody else's
+host; a link to the domain's own front page is not somewhere else.
+
+**Nothing is paid for having links.** That would be a credit for markup the domain writes about itself,
+which the verification rule forbids and which an operator could mint by the hundred. The credit is
+withheld from a page that offers nowhere to go, and withholding is not penalising — such a domain
+scores neutral and lands in `unclear` rather than in an actionable band.
+
+The escape hatch is 15,000 characters of text, which makes a page substantive whatever it links to. It
+exists for script-rendered sites, whose navigation is assembled by JavaScript the probe does not run
+and so is absent from the HTML: four of the five legitimate link-free pages in the holdout are in that
+shape, at 18,000 to 262,000 characters. The bound sits an order of magnitude above the population it
+must exclude rather than between two neighbouring clusters — the Hostinger and Spaceship placeholder
+pages run to about 925 and 2,700 characters.
+
+#### The page gets a say in whether it is a placeholder
+
+Through `1.7.0` the parking penalty fired on any one of 38 fingerprints appearing anywhere in the
+fetched HTML, and the list mixed two things that are not alike. Some entries name what the whole page
+is — "domain default page", "account suspended", "this domain is for sale" — and no working site has a
+reason to print them. Others could be ordinary copy: "coming soon" is a label on an events listing,
+"make an offer" is a button on a shop, "index of /" is a line in documentation, and "domain for sale"
+is the business a registrar is in.
+
+The result was that the model asserted two contradictory things about one page. `site.substantive_content`
+paid +6 for a page carrying a title and real readable text, while `site.parked` charged -12 — and a
+further -8 through `combo.parked_with_mx` — for the same page being a placeholder. Twelve holdout
+domains were in that state. Five were working sites belonging to real organisations: a Chilean
+university, a Nigerian retail platform, an arts nonprofit in Duluth scored at 18 and `high_risk`, a
+renewable-energy firm, and Namecheap.
+
+From `1.8.0` the loose half lives in a second table and is consulted only where the page has no title
+or under 500 characters of readable text. The claim is not that those phrases are worthless — "coming
+soon" alone appears on 29 abuse domains in the holdout — but that a phrase which merely *suggests* a
+placeholder is answered by the page itself. The three genuine parking pages that cleared the
+substantive bar all matched "domain default page" and are unaffected, which is why the split is
+between two tables rather than between parked and substantive outright.
+
+Nameserver delegation and redirect-to-parking are untouched. Those are statements the infrastructure
+makes, and a parking service can serve whatever page it likes without changing what it is.
+
+`1.9.0` corrected the gate and extended the dispositive table. The gate had been written against the
+content credit, which conflated two unrelated reasons for withholding one: a page with nothing on it,
+and a page belonging to a third party. `mycloaked.id` forwards to Cloaked's own homepage, which
+carries a "Coming soon" badge on a feature tile, and was parked for it — exactly the error
+`redirectedOffDomain` exists to prevent. The gate now asks whether the *response* is a real page,
+which stays true for a page served from somewhere else, while the credit continues to require the page
+to be this domain's own.
+
+The table grew by five phrases found by reading the titles of every stored page the model did **not**
+call parked, which is a question the fingerprint list had never been asked. The two most common titles
+in that set were "Parked Domain name on Hostinger DNS system" (121 pages) and a variant of "Parking
+Page" (90). Both are pages declaring themselves parked in almost those words, and neither matched
+anything in the list: `hostinger parking` had been written for a page Hostinger does not serve, and
+`domain is parked` does not occur in "Parked Domain name on". The cost was not the missing -12 alone —
+those pages carry about 925 characters of boilerplate, so 129 of the 130 were being *paid* +6 for
+having a real website.
+
+Every candidate was tested against all 133 legitimate pages before being added, and that test is what
+kept the list honest. A bare `default page` drew 19 legitimate hits and was dropped. `web server is
+down` and `bad gateway` were dropped for a different reason: an origin that is temporarily unreachable
+is not a parked domain, and reading a transient failure as evidence of account farming is what the
+"penalise only on positive evidence" rule forbids.
+
+The placeholder table also gained the same two sentences in six other languages, which is the direct
+remedy for the localisation blind spot the asset-path entries were added to work around.
+
 An off-domain redirect is neutral rather than penalised, which is a measured result rather than an
 oversight; see the removals below. It still withholds the content credit, because a root that forwards
 elsewhere never serves the page itself, so redirecting costs a domain the +6 without charging it
@@ -424,6 +614,69 @@ The dimension is deliberately thin. Character-histogram measures of the label, e
 counting, were built and then dropped after the benchmark showed they select legitimate domains ahead
 of abuse at every threshold that fires at all. See the removals below.
 
+#### Label scarcity, proposed and refused
+
+A short label in a mature namespace is genuinely hard to acquire — every three-letter `.com` has been
+registered since 1997 and every four-letter one since 2007 — so crediting one looks like the same
+argument that earns an accreditation gate its credit: the holder cannot have minted it. Measured, it
+does not survive, and the numbers are recorded here because the idea is a natural one to have twice.
+
+| Label length under `com`/`net`/`org` | Legitimate | Abuse |
+| --- | --- | --- |
+| 2 or fewer | 2 | 0 |
+| 3 or fewer | 3 | 3 |
+| 4 or fewer | 5 | 9 |
+| 5 or fewer | 11 | 79 |
+
+Across all suffixes the measure is *anti*-correlated, at 3.5% legitimate among labels of four characters
+or fewer against a 4.5% base rate, because the cheap bulk namespaces favour short generated labels: 655
+of the holdout's `web.id` farm domains are in that bucket. So any version of this has to be confined to
+the legacy namespaces, where the cumulative table above is itself the wrong frame — and that frame is
+recorded because it is the mistake the idea invites. Scarcity in `.com` is steeply non-linear rather
+than graded: every three-character combination has been registered since 1997 and trades in five
+figures, four-character labels have been gone since 2007 and trade in low four figures, and five
+characters is still available at retail. Rolling them together lets the 79 abuse domains in the
+five-character bucket answer a question only ever asked about three.
+
+Read on its own, the three-character cohort is small enough to take one domain at a time:
+
+| Domain | Label | Score | Verdict |
+| --- | --- | --- | --- |
+| `tmg.com` | `LEGITIMATE` | 82 | `established` |
+| `6po.net` | `DISPOSABLE` | 45 | `unclear` |
+| `c35.net` | `DISPOSABLE` | 44 | `unclear` |
+| `snd.de5.net` | `ABUSE` | 58 | `probably_legitimate` |
+
+**Two of the four are disposable mail providers, and that is causal rather than coincidental.** A
+temp-mail service's product is an address a stranger types by hand, so a short memorable domain is a
+feature it will pay for — which is why `6po.net`, `c35.net` and `2925.com` are short. Scarcity does not
+select for "an institution that cannot have minted this name in bulk", which is what an accreditation
+gate establishes. It selects for "somebody who paid for a short string", and disposable-mail operators
+are among the most motivated buyers of exactly that. The credit would be aimed at a population it cannot
+discriminate within, which is the failure mode the character-histogram measures had.
+
+**The decisive objection is that the upside is empty.** Every legitimate short legacy domain in the
+holdout already reaches a legitimate band unaided: `q.com` at 92, `tmg.com` at 82, `dr.com` at 76,
+`sent.com` at 70, `duck.com` at 68. There is no legitimate domain for the credit to rescue, because
+whatever makes a name scarce also makes it *old*, and registration age is already the heaviest signal in
+the model — a three-character `.com` necessarily predates 1997 and is paid for it. Scarcity is a worse
+proxy for the same underlying fact, and it parts company with that fact in exactly one case, a short
+name recently transferred to a new holder, which is the case where it actively misleads: drop-catching
+and resale are how an operator acquires one.
+
+Implemented as a real signal at the vetted weight and put through the audit, a three-character credit
+moved abuse domains in a legitimate band from 175 to **177** and changed nothing else. AUC held at 0.960
+and the legitimate band distribution was identical row for row. The two domains it promoted were
+`6po.net` and `c35.net`, out of `unclear` and into `probably_legitimate`, so its entire measured effect
+was to advance two disposable mail providers.
+
+One labelling caveat, because it is the fair objection to all of the above. `2925.com` and `abbun.com`
+are long-established real operations that misbehave rather than farmed throwaways, so scoring them as
+plain abuse does understate how well short names correlate with being a going concern. Both points hold
+and neither rescues the signal: `2925.com` is a disposable mail provider, which this service exists to
+flag rather than to forgive, and at four and five characters neither domain was ever evidence about
+three.
+
 The vetted-suffix credit is the largest single number in the model, so what belongs on the list matters
 more than the weight does. The entry criterion is that the suffix is gated by accreditation, and a suffix
 that merely reads as institutional does not qualify. Two entries were removed in `1.2.0` for failing it, and
@@ -432,6 +685,48 @@ domains and sells to anyone in realtime for about $4, and `edu.eu.org`, which si
 same codebase classifies as a free-subdomain provider. Before the fix the credit fired on 28 abuse
 domains against 8 legitimate ones and read as actively harmful; after it, on 13 families with an abuse
 share well below the base rate.
+
+`1.8.0` applied the same criterion in the other direction and added 57 suffixes that met it and were
+simply missing — 29 government and 28 academic namespaces across the Middle East, Africa, Central and
+South-East Asia, Eastern Europe and Latin America. The list was previously dominated by the
+English-speaking and Western European forms, which is a coverage gap rather than a judgement, and it
+had a measurable cost: `edu.eg` alone carries four holdout domains, all of them Egyptian Ministry of
+Education school mail under `moe.edu.eg`, each sitting at 46 and `unclear` because the registry
+publishes no creation date for the age anchor to use. They now score 61.
+
+Each candidate was checked against the criterion rather than against the holdout, which also means
+recording what was rejected. Four more were refused as `edu.pl`-style traps, where the name reads as
+institutional and a registrar will sell it: `ac.cn`, `edu.az`, `edu.do` and `ac.ug`. Two are gated but
+not by accreditation — `edu.ee` is granted free on an emailed request, and `edu.dz` accepts a
+commercial register extract — and were refused for that reason. Five proposed entries are not zones at
+all and were dropped once their real spellings were found, which is the kind of error a list grown by
+plausibility accumulates quietly.
+
+#### Three removals in `1.9.0`, and what the entry test actually turns on
+
+The gTLD half of the list was audited against registry policy for the first time, and three sponsored
+suffixes no longer meet the criterion they were admitted under. `travel` is now a single boolean EPP
+parameter the registrar sets, its pre-registration identification number abolished and its own policy
+reserving authentication for "prior to or after name registration, at the discretion of the Registry".
+`jobs` answers its own FAQ question "can anyone register" with "Yes, any person". `museum` was
+reclassified from Sponsored to Community in 2017 and widened to admit "a Museum enthusiast", of which
+the registry says "no particular proof is required". This is the `edu.pl` lesson for the third time,
+in its most general form: **a suffix earns this credit for the gate it has today, not the gate it was
+delegated with**, and sponsored TLDs liberalise without announcing it. `aero`, `coop` and `post` were
+re-checked in the same pass and all three hold.
+
+Seven were added: `swiss`, `law`, `abogado`, `cpa`, `realtor`, `creditunion` and `reit`. None appears
+in the holdout, so they ship on the criterion and are not measurable here.
+
+What separated them from the thirteen candidates refused is almost never the absence of a policy. It
+is *when* the policy is applied. `ngo` and `ong` have the registrant "certify" eligibility and audit
+only on complaint; `scot`, `gal` and `eus` each state in their own language that community nexus is
+subject to post-validation; `dentist` and `vet` require only that a registrant "represent" they hold
+the necessary licences. A registry that validates after activation has already sold the name to an
+account farmer who will be finished with it before anyone looks. `music` is the instructive near miss:
+its verification is mandatory and enforced by suspension, but since April 2026 a domain is usable
+immediately with up to a year to complete it, and a year is several orders of magnitude longer than
+this threat model needs.
 
 ## Combinations
 
@@ -506,8 +801,22 @@ total is capped.
 Applied after summation, in order:
 
 1. A major consumer mail provider short-circuits everything with `out_of_scope: shared_free_provider`
-   and no score. A domain whose mail is handled by consumer mail infrastructure is treated the same
-   way, since it is a shared provider vanity domain.
+   and no score. That gate runs before any network work, on a hardcoded list of provider domains, and
+   a list like that can never be complete: these providers operate hundreds of vanity names apiece.
+   From `1.8.0` a domain whose *mail exchangers* are a consumer provider's own inbound infrastructure
+   reaches the same verdict by the general test, which is what the MX fingerprint table was always
+   for. Three versions of this document and the table's own comment described that routing while
+   nothing implemented it: the class was set, and used to stop a provider's vanity domain reading as a
+   paying business tenant, but no signal, observation or flag read it, so all 19 such domains in the
+   holdout were scored as ordinary businesses and 15 came out `unclear`.
+
+   This one differs from the pre-network gate in what it keeps. The score, the signals, the
+   observations and the source statuses all survive it, and only the verdict is withheld, because
+   declining to answer is not the same as declining to show the evidence — a reader who disagrees that
+   a domain is a shared provider needs to see what was observed in order to say so. The matched
+   exchanger is reported as an observation, and the gauge says why the number beside it is not a
+   judgement. Holdout grading treats these as neither a false positive nor a false negative, on the
+   same footing as the privacy group.
 2. An RDAP registry hold (`serverHold` or `clientHold`) caps `legitimacy` at 10. This is the only hard
    cap: the registry suspending a domain is the one external verdict the model treats as decisive, and
    the reputation lookup is deliberately not another — a commercial classifier is a weighted signal, not
@@ -853,6 +1162,87 @@ decide. The audit prints such cases as `KEEP bands disagree` rather than hiding 
 number was consulted first, and three signals currently carry that tier.
 
 ## Changelog
+
+### 1.10.0
+
+Disposable *providers*, as distinct from their customers. AUC rose from 0.960 to 0.961, legitimate
+domains in an actionable band held at 7 for the third version running, and abuse domains in a legitimate
+band fell from 175 to 169.
+
+- **The crawler now reads a service's own advertising.** Every prior disposable detector identifies a
+  customer of a throwaway-inbox service, and all three fire on none of the 123 domains the holdout
+  labels disposable. A provider's own domain is invisible to them while genuinely holding the age,
+  records and website those facts credit. Matching the page title against phrases that name the product
+  catches 43 pages, 41 of them abuse and none legitimate.
+- **A confirmed disposable provider can no longer be argued back up.** `overrides.disposableCap` caps
+  the score at the top of `high_risk`, separating "is this a real operation", which stays additive, from
+  "does it mint throwaway addresses", which becomes dispositive. Only the dispositive signals trigger
+  it; free routing and alias forwarding are deliberately excluded because both fire on ordinary small
+  domains.
+
+Nothing was repriced and no weight moved. Two variants were refused on measurement: matching the phrases
+in the page body tripled the recovery and cost a legitimate page, and capping on the existing
+`RELAY_DOMAINS` table would have created four false positives including `duck.com`, since that table
+lists the domains providers issue aliases under rather than the services' shopfronts.
+
+### 1.9.0
+
+Four changes, all aimed at telling a working website apart from a page that exists only so the domain
+resolves, and all of them corrections to a rule rather than new rules. AUC rose from 0.957 to 0.960,
+legitimate domains in an actionable band held at 7, and abuse domains in a legitimate band fell from
+194 to 175. No weight or threshold in the model changed.
+
+- **The content credit now requires somewhere else to go on the same domain.** 200 of the 467 abuse
+  pages earning it had no internal link at all, against 5 of 72 legitimate ones. Nothing is paid for
+  having links; the credit is withheld from a page offering nowhere to go, with a 15,000-character
+  escape hatch for script-rendered sites whose navigation the probe cannot see.
+- **Five self-declaring parking titles were added.** Found by reading the titles of pages the model did
+  *not* call parked: 121 said "Parked Domain name on Hostinger DNS system" and 90 some variant of
+  "Parking Page", and 129 of 130 were being paid the content credit for about 925 characters of
+  parking boilerplate.
+- **The placeholder gate no longer closes on a page served by a third party.** It had been written
+  against the content credit, which withholds itself for off-domain redirects, so a "Coming soon" badge
+  on the homepage `mycloaked.id` forwards to was being read as evidence about `mycloaked.id`.
+- **Three sponsored gTLDs were removed from the vetted list** — `travel`, `jobs` and `museum` — each of
+  which has liberalised to the point of self-attestation since delegation, and seven professionally
+  validated ones were added. `aero`, `coop` and `post` were re-checked and hold.
+
+Two proposals were measured and refused. **Short labels in mature namespaces** are *anti*-correlated
+with legitimacy across the holdout, and the two highest-scoring short legacy names in it are both
+abuse. **Fingerprinting the parking services' asset hosts** would have separated 194 abuse pages from 0
+legitimate ones, and is hosting reputation by the back door — the same inference the project refuses
+for ASN and IP range, on a 212-domain legitimate sample. The page titles were used instead, which are
+a property of the page rather than of who serves it.
+
+### 1.8.0
+
+Six changes, five of which remove a misreading of evidence the analysis was already fetching, and none
+of which reprices a signal. AUC rose from 0.944 to 0.957, legitimate domains in an actionable band held
+at 7, and abuse domains in a legitimate band fell from 216 to 194. The theme is that each fixes a place
+where a rule was firing on a population it could not discriminate within, or on a string that did not
+mean what the rule took it to mean.
+
+- **Record breadth no longer applies to a platform-issued tenancy**, in either direction. Microsoft
+  publishes the `onmicrosoft.com` zone, so a tenant's name is mail-only by construction and all nine in
+  the holdout paid a penalty none of them could have avoided.
+- **The paid-tenancy credit matches only the preferred exchangers.** A backup MX no mail is ever
+  delivered to was buying it, and worse, was suppressing the in-zone inspection of the exchanger that
+  actually receives.
+- **57 accredited government and academic suffixes** were added to the vetted list, which had been
+  dominated by the English-speaking and Western European forms.
+- **Presence-gated registries are exempt from the first-year price penalty**, because the penalty
+  infers disposability from cost and that inference needs the cost to be the whole barrier.
+- **The parking fingerprint list was split in two**, so a phrase that could be ordinary copy no longer
+  outranks a page that is plainly a working site.
+- **A consumer-provider mail match now reaches the `out_of_scope` verdict**, which this document had
+  claimed for three versions while nothing implemented it.
+
+One dead condition was also removed: the cheapness term in `combo.farm_profile` asked whether the price
+signal had returned a row, and it returns one for every priced domain, so the conjunction had three live
+parts rather than four.
+
+`clamps.configuration.max` fell from 10 to 6 — the only number that moved, and the one place where the
+threshold sweep's recommendation is knowingly not taken.
 
 ### 1.7.0
 

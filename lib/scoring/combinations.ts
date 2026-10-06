@@ -1,4 +1,5 @@
 import { ageDays, type DomainFacts } from '../facts';
+import { presenceRequirementFor } from '../data/presence-required-suffixes';
 import type { ScoringConfig } from './weights';
 import type { SignalResult } from './signals';
 
@@ -24,12 +25,22 @@ export type CombinationDefinition = {
   rationale: string;
   /** Signal ids that must all have fired for this combination to apply. */
   requires: string[];
-  points?: number;
   /**
    * Extra conditions beyond signal presence, for the cases where the conjunction depends on a fact
    * rather than on another signal having fired.
    */
   applies?(facts: DomainFacts, fired: Set<string>, cfg: ScoringConfig): boolean;
+  /**
+   * What firing is worth and what was seen, declared beside the conjunction that earns it.
+   *
+   * This used to be a `switch` over `id` inside `evaluateCombinations`, which made a combination the
+   * one registry in the scorer whose behaviour lived somewhere other than its definition — the signals
+   * carry `evaluate` and the observations carry `observe`. The switch also had a `default` arm, so a
+   * combination added to the list and forgotten in the switch passed its conditions, contributed
+   * nothing and reported nothing, which is indistinguishable from not firing. Required here, so that
+   * omission is a compile error instead.
+   */
+  award(facts: DomainFacts, cfg: ScoringConfig): { points: number; evidence: string; floor?: number };
 };
 
 export type CombinationResult = {
@@ -66,12 +77,44 @@ const hasMx = (facts: DomainFacts): boolean => (facts.dns?.mx.length ?? 0) > 0;
  * whole national small-business populations rather than on disposable domains.
  */
 function deeplyDiscounted(facts: DomainFacts, cfg: ScoringConfig): boolean {
-  const price = facts.pricing?.registration;
+  const price = pricedForDisposability(facts);
   if (price === undefined) return false;
   const deepest = cfg.economics.priceTiers.reduce((worst, tier) =>
     tier.points < worst.points ? tier : worst,
   );
   return price < deepest.under;
+}
+
+/**
+ * Whether the suffix is cheap enough that the price table charges for it.
+ *
+ * Read from the facts rather than from `fired`, and that is a fix rather than a style choice. The term
+ * used to be `fired.has('economics.first_year_price')`, and that signal returns a row for every priced
+ * domain — zero points for mainstream pricing, as the collapsed section a reader sees depends on. So
+ * the condition was true for every domain with a price at all and the conjunction had three live parts
+ * instead of four. It still described abuse correctly, because `noBrakeOnDisposal` below independently
+ * requires either a steep renewal or a bottom-tier price, but the cheapness the label claims to test
+ * was being asserted rather than tested.
+ *
+ * Fixing it matters now because a presence-required suffix also returns a row at zero. Left as it was,
+ * `.de` would have gone on satisfying `cheap` through the very row that says its price is not evidence.
+ */
+function cheaplyPriced(facts: DomainFacts, cfg: ScoringConfig): boolean {
+  const price = pricedForDisposability(facts);
+  if (price === undefined) return false;
+  const tier = cfg.economics.priceTiers.find((entry) => price < entry.under);
+  return (tier?.points ?? 0) < 0;
+}
+
+/**
+ * The list price, where a low one says anything about the cost of disposing of the name.
+ *
+ * One reader of the exemption rather than two, so the conjunctions and the signal cannot disagree about
+ * whether `.de` is cheap. See `lib/data/presence-required-suffixes.ts`.
+ */
+function pricedForDisposability(facts: DomainFacts): number | undefined {
+  if (presenceRequirementFor(facts.meta.suffix)) return undefined;
+  return facts.pricing?.registration;
 }
 
 export const COMBINATIONS: readonly CombinationDefinition[] = [
@@ -94,7 +137,7 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
        * to charge points for it.
        */
       const free = facts.meta.providerSuffix?.kind === 'free_subdomain';
-      const cheap = fired.has('economics.first_year_price') || free;
+      const cheap = cheaplyPriced(facts, cfg) || free;
       // Disposal is unbraked either because year one was discounted and the real price is never paid, or
       // because the suffix is at the bottom of the price table and there was never a real price to pay.
       const noBrakeOnDisposal = fired.has('economics.renewal_ratio') || free || deeplyDiscounted(facts, cfg);
@@ -102,6 +145,10 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
       const insideFirstTerm = age !== null && age < 366;
       return cheap && noBrakeOnDisposal && insideFirstTerm && !hasSite(facts);
     },
+    award: (_facts, cfg) => ({
+      points: cfg.combinations.farmProfile,
+      evidence: 'All four conditions hold together',
+    }),
   },
   {
     id: 'combo.free_routing_young_no_site',
@@ -114,6 +161,10 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
       const age = ageDays(facts);
       return age !== null && age < cfg.combinations.freeRoutingYoungNoSite.maxAgeDays && !hasSite(facts);
     },
+    award: (facts, cfg) => ({
+      points: cfg.combinations.freeRoutingYoungNoSite.points,
+      evidence: `Free routing on a domain ${ageDays(facts)} days old with no substantive website`,
+    }),
   },
   /*
    * There is deliberately no wildcard-MX-plus-youth-plus-no-site conjunction, though 1.5.0 shipped with
@@ -150,6 +201,10 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
         !hasSite(facts)
       );
     },
+    award: (facts, cfg) => ({
+      points: cfg.combinations.registrarDefaultProfile.points,
+      evidence: `${facts.registrarDefault?.provider ?? 'the registrar'} default nameservers and forwarding remain on a young domain with no substantive site`,
+    }),
   },
   {
     id: 'combo.inbound_without_outbound',
@@ -167,6 +222,10 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
         !facts.mail?.spf && (facts.mail?.dkimSelectors.length ?? 0) === 0 && !facts.mail?.dmarcPolicy;
       return aliasing && noOutbound;
     },
+    award: (_facts, cfg) => ({
+      points: cfg.combinations.inboundWithoutOutbound,
+      evidence: 'Alias-capable inbound mail with no SPF, DKIM or DMARC at all',
+    }),
   },
   {
     id: 'combo.parked_with_mx',
@@ -176,6 +235,10 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
       'Parking a domain normally means nothing is running on it, mail included. A parked page with working mail describes a name whose only live function is its mailbox.',
     requires: ['site.parked'],
     applies: hasMx,
+    award: (_facts, cfg) => ({
+      points: cfg.combinations.parkedWithMx,
+      evidence: 'Parked page with configured mail',
+    }),
   },
 
   // -------------------------------------------------------------------------------------------
@@ -202,6 +265,14 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
       const age = ageDays(facts);
       return age !== null && age >= cfg.combinations.conclusiveLegitimacyMinAgeDays;
     },
+    // The only combination that bounds the result rather than contributing to it, so it scores zero
+    // and returns a floor. Reported at zero rather than hidden, because a reader owed the reason the
+    // score stopped falling cannot get it from a row that is not there.
+    award: (_facts, cfg) => ({
+      points: 0,
+      floor: cfg.combinations.conclusiveLegitimacyFloor,
+      evidence: `Score floored at ${cfg.combinations.conclusiveLegitimacyFloor} by positive override`,
+    }),
   },
 
   // -------------------------------------------------------------------------------------------
@@ -235,6 +306,11 @@ export const COMBINATIONS: readonly CombinationDefinition[] = [
         (facts.mail && facts.mail.saasVendors.length === 0 ? 1 : 0);
       return missing >= 2;
     },
+    award: () => ({
+      points: 0,
+      evidence:
+        'No penalty applied for absent DMARC, DNSSEC or vendor verification records, which are treated as one absence and never as evidence',
+    }),
   },
 ];
 
@@ -260,83 +336,20 @@ export function evaluateCombinations(
     if (!requirementsMet) continue;
     if (combination.applies && !combination.applies(facts, fired, cfg)) continue;
 
-    switch (combination.id) {
-      case 'combo.farm_profile': {
-        results.push(describe(combination, cfg.combinations.farmProfile, 'All four conditions hold together'));
-        break;
-      }
-      case 'combo.free_routing_young_no_site': {
-        const age = ageDays(facts);
-        results.push(
-          describe(
-            combination,
-            cfg.combinations.freeRoutingYoungNoSite.points,
-            `Free routing on a domain ${age} days old with no substantive website`,
-          ),
-        );
-        break;
-      }
-      case 'combo.inbound_without_outbound': {
-        results.push(
-          describe(
-            combination,
-            cfg.combinations.inboundWithoutOutbound,
-            'Alias-capable inbound mail with no SPF, DKIM or DMARC at all',
-          ),
-        );
-        break;
-      }
-      case 'combo.registrar_default_profile': {
-        const provider = facts.registrarDefault?.provider ?? 'the registrar';
-        results.push(
-          describe(
-            combination,
-            cfg.combinations.registrarDefaultProfile.points,
-            `${provider} default nameservers and forwarding remain on a young domain with no substantive site`,
-          ),
-        );
-        break;
-      }
-      case 'combo.parked_with_mx': {
-        results.push(describe(combination, cfg.combinations.parkedWithMx, 'Parked page with configured mail'));
-        break;
-      }
-      case 'combo.conclusive_legitimacy': {
-        floor = cfg.combinations.conclusiveLegitimacyFloor;
-        results.push(
-          describe(combination, 0, `Score floored at ${cfg.combinations.conclusiveLegitimacyFloor} by positive override`),
-        );
-        break;
-      }
-      case 'combo.correlated_absence': {
-        results.push(
-          describe(
-            combination,
-            0,
-            'No penalty applied for absent DMARC, DNSSEC or vendor verification records, which are treated as one absence and never as evidence',
-          ),
-        );
-        break;
-      }
-      default:
-        break;
-    }
+    const awarded = combination.award(facts, cfg);
+    // Overrides bound the result rather than contributing to it, and only one does so. Taking the
+    // strongest rather than the last keeps the outcome independent of registry order.
+    if (awarded.floor !== undefined) floor = Math.max(floor ?? awarded.floor, awarded.floor);
+
+    results.push({
+      id: combination.id,
+      mode: combination.mode,
+      label: combination.label,
+      rationale: combination.rationale,
+      points: awarded.points,
+      evidence: awarded.evidence,
+    });
   }
 
   return { results, floor };
-}
-
-function describe(
-  combination: CombinationDefinition,
-  points: number,
-  evidence: string,
-): CombinationResult {
-  return {
-    id: combination.id,
-    mode: combination.mode,
-    label: combination.label,
-    rationale: combination.rationale,
-    points,
-    evidence,
-  };
 }

@@ -3,7 +3,7 @@ import { OBSERVATIONS } from '@/lib/scoring/observations';
 import { SIGNALS, type WeightRange } from '@/lib/scoring/signals';
 import { VERDICT_DESCRIPTIONS, VERDICT_LABELS } from '@/lib/scoring/verdict';
 import { DEFAULT_CONFIG } from '@/lib/scoring/weights';
-import { DIMENSION_LABELS } from '@/lib/api-types';
+import { dimensionLabel } from '@/lib/api-types';
 import { signedPoints as signed } from '@/lib/format';
 import type { Verdict } from '@/lib/scoring/weights';
 import type { ReactNode } from 'react';
@@ -212,7 +212,7 @@ export default function HowItWorks() {
             // The same responsive grid as the verdict list above, rather than the fixed 13rem label
             // column this used to carry, which left no room for the range on a narrow phone.
             <li key={dimension} className="grid gap-1 py-2 sm:grid-cols-[13rem_minmax(0,1fr)] sm:gap-4">
-              <span>{DIMENSION_LABELS[dimension] ?? dimension}</span>
+              <span>{dimensionLabel(dimension)}</span>
               <span className="font-mono text-xs text-ink-muted">
                 {signed(DEFAULT_CONFIG.clamps[dimension].min)} to{' '}
                 {signed(DEFAULT_CONFIG.clamps[dimension].max)}
@@ -232,7 +232,7 @@ export default function HowItWorks() {
         {heuristics.map((group) => (
           <div key={group.dimension} className="space-y-2">
             <h4 className="text-sm font-medium text-ink-muted">
-              {DIMENSION_LABELS[group.dimension] ?? group.dimension}
+              {dimensionLabel(group.dimension)}
             </h4>
             <ul className="space-y-3 rounded-lg border border-edge bg-surface-raised p-4">
               {group.signals.map(({ signal, weight }) => (

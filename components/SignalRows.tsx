@@ -2,7 +2,7 @@
 
 import { useCallback, useId, useMemo, useState, type ReactNode } from 'react';
 import { SourcePanel } from '@/components/SourcePanel';
-import { DIMENSION_LABELS } from '@/lib/api-types';
+import { dimensionLabel } from '@/lib/api-types';
 import type { SourceStatus } from '@/lib/facts';
 import { signedPoints } from '@/lib/format';
 import { glossaryFor } from '@/lib/glossary';
@@ -218,7 +218,7 @@ export function SignalRows({
     ...combinations.map((entry) => ({ ...entry, sourceUrl: undefined, tag: 'Combination' })),
     ...scoring.map((entry) => ({
       ...entry,
-      tag: DIMENSION_LABELS[entry.dimension] ?? entry.dimension,
+      tag: dimensionLabel(entry.dimension),
     })),
   ].sort((a, b) => magnitude(b.points) - magnitude(a.points));
   const topFindings = findings.slice(0, 3);
@@ -255,7 +255,7 @@ export function SignalRows({
       .filter((signal) => signal.points === 0)
       .map((signal) => ({
         ...signal,
-        tag: DIMENSION_LABELS[signal.dimension] ?? signal.dimension,
+        tag: dimensionLabel(signal.dimension),
       })),
     ...observations.map((observation) => ({ ...observation, tag: 'Never scored' })),
   ];
@@ -371,7 +371,7 @@ export function SignalRows({
               {sections.map(({ dimension, rows }) => (
                 <section key={dimension}>
                   <h4 className="mb-2 text-sm font-medium text-ink-muted">
-                    {DIMENSION_LABELS[dimension] ?? dimension}
+                    {dimensionLabel(dimension)}
                   </h4>
                   <ul className="rounded-lg border border-edge bg-surface-raised px-4">
                     {rows.map((signal) => (

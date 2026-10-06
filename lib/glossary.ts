@@ -6,8 +6,9 @@
  * rest. A reader who does not administer DNS can follow the verdict and not the reason for it, which is
  * the half of this tool that matters.
  *
- * Definitions rather than tooltips, for the reason already recorded in `components/DimensionBars.tsx`:
- * a `title` attribute survives neither touch nor a keyboard. They are collected into one disclosure
+ * Definitions rather than tooltips, because a `title` attribute survives neither touch nor a
+ * keyboard, so the reader most likely to need one is the least likely to get it. They are collected
+ * into one disclosure
  * that lists only the terms a particular result actually used, so the glossary is as short as that
  * domain made it and a reader who needs none of it sees one line.
  */

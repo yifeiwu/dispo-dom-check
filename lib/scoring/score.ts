@@ -17,6 +17,41 @@ import { narrate } from './narrative';
  * then bonuses, then overrides, then per-dimension clamps, then bands.
  */
 
+/**
+ * The signals that establish disposable addressing conclusively enough to cap the verdict.
+ *
+ * Membership is the narrow question of whether a *legitimate* domain could produce the observation, not
+ * of how negative the signal is. Each of these identifies a throwaway-inbox service either by its own
+ * infrastructure, by a token it had to publish, by a third party's verdict, or by the service naming
+ * itself in its page title. None of them has a benign reading.
+ *
+ * `signup.free_routing`, `signup.forwarder`, `signup.wildcard_mx` and `signup.ambiguous_routing` are
+ * excluded, and the reason is the whole of the distinction: all four fire on ordinary small domains.
+ * Free routing is how a great many one-person businesses receive mail, and alias forwarding is a
+ * legitimate privacy practice this model's stated policy is to flag rather than condemn. Capping on
+ * them would make that policy false in code. See `overrides.disposableCap` in `weights.ts`.
+ */
+const DISPOSITIVE_DISPOSABLE: ReadonlySet<string> = new Set([
+  'signup.temp_mail',
+  'signup.temp_mail_endpoint',
+  'signup.disposable_token',
+  'signup.disposable_declared',
+]);
+
+/**
+ * Whether anything established disposable addressing conclusively, which caps the verdict.
+ *
+ * `signup.checkmail` is read from the fact rather than from the set above, and the distinction is not
+ * cosmetic: that one signal covers the vendor's whole answer, returning a *credit* where the vendor
+ * knows nothing against the domain. Keying the cap on the signal having fired would therefore cap every
+ * domain Check-Mail cleared, which is the exact inversion of what it is for. Only the disposable
+ * verdict counts.
+ */
+function dispositivelyDisposable(facts: DomainFacts, signals: SignalResult[]): boolean {
+  if (facts.checkmail?.disposable) return true;
+  return signals.some((signal) => DISPOSITIVE_DISPOSABLE.has(signal.id));
+}
+
 export type ReasonFlag =
   | 'disposable'
   | 'forwarder'
@@ -147,6 +182,9 @@ export function score(
   if (onHold) {
     legitimacy = Math.min(legitimacy, cfg.overrides.registryHoldCap);
   }
+  if (dispositivelyDisposable(facts, signals)) {
+    legitimacy = Math.min(legitimacy, cfg.overrides.disposableCap);
+  }
   if (combos.floor !== undefined) {
     legitimacy = Math.max(legitimacy, combos.floor);
   }
@@ -162,7 +200,7 @@ export function score(
     legitimacy,
     risk: 100 - legitimacy,
     confidence,
-    verdict: verdictFor(legitimacy, confidence, cfg),
+    verdict: verdictFor(legitimacy, confidence, cfg, isSharedMailProvider(facts)),
     flags: deriveFlags(facts, signals, combos.results, age),
     narrative: '',
     dimensions,
@@ -239,6 +277,23 @@ function computeConfidence(facts: DomainFacts, cfg: ScoringConfig): number {
   return Math.round(clamp(confidence, 0, 100));
 }
 
+/**
+ * Whether this domain is itself a shared mail provider rather than one organisation's name.
+ *
+ * The one predicate behind the `out_of_scope` verdict, kept here rather than inside `verdictFor` so
+ * that the band function stays a pure function of two numbers and a config. `verdictFor` carries the
+ * reasoning for why the verdict exists; this carries what satisfies it.
+ *
+ * It reads the signup class directly, which is the whole of the test: `collectSignup` sets
+ * `consumer_infrastructure` when the mail exchangers belong to a large free provider's own inbound
+ * infrastructure, and nothing else produces that class. Until now nothing read it either, so the class
+ * existed only as a side effect of being checked before the paid table — which stopped a provider's
+ * vanity domain from scoring as a paying business tenant, and then went no further.
+ */
+function isSharedMailProvider(facts: DomainFacts): boolean {
+  return facts.signup?.class === 'consumer_infrastructure';
+}
+
 function deriveFlags(
   facts: DomainFacts,
   signals: SignalResult[],
@@ -258,12 +313,16 @@ function deriveFlags(
     flags.add('disposable');
   }
   if (facts.signup?.class === 'forwarder' || facts.meta.relayDomain) flags.add('forwarder');
-  // A wildcard MX is the capability this flag names, stated more directly than free routing states it:
-  // the zone answers for addresses nobody has created yet.
-  if (facts.signup?.class === 'free_routing' || (facts.signup?.wildcardMx?.hosts.length ?? 0) > 0) {
+  // A wildcard MX is the capability this flag names, stated more directly than either routing class
+  // states it: the zone answers for addresses nobody has created yet. All three routes raise the one
+  // flag, so they are tested together rather than in two statements that happened to be written apart.
+  if (
+    facts.signup?.class === 'free_routing' ||
+    facts.signup?.class === 'ambiguous_routing' ||
+    (facts.signup?.wildcardMx?.hosts.length ?? 0) > 0
+  ) {
     flags.add('catch_all_capable');
   }
-  if (facts.signup?.class === 'ambiguous_routing') flags.add('catch_all_capable');
   if (facts.dns && facts.dns.mx.length === 0) flags.add('no_mx');
   if (age !== null && age < 30) flags.add('too_new');
   if (facts.meta.providerSuffix) flags.add('provider_subdomain');

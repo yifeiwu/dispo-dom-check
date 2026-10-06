@@ -83,19 +83,34 @@ export const SAAS_VERIFICATION_VENDORS: readonly { prefix: string; vendor: strin
   { prefix: 'teamviewer-sso-verification', vendor: 'TeamViewer' },
 ];
 
-/** Counts distinct vendors across the apex TXT set. */
-export function countSaasVendors(txtRecords: readonly string[]): string[] {
+/**
+ * The distinct names a prefix table matches across the apex TXT set.
+ *
+ * Both tables in this file are read identically — lowercase the record, strip the quoting a resolver
+ * may have left around it, test the prefixes — and each had grown its own copy of that loop. The
+ * tables keep their own field names, because `vendor` and `provider` are each the right word for what
+ * they hold; the selector is how two differently-named shapes meet one reader.
+ *
+ * First match per record wins. A record cannot start with two prefixes unless one is a prefix of the
+ * other, and where that happens today (`ca3-` and `digicert-domain-verification`) both name DigiCert.
+ */
+function matchTxtPrefixes<T extends { prefix: string }>(
+  txtRecords: readonly string[],
+  table: readonly T[],
+  nameOf: (entry: T) => string,
+): string[] {
   const found = new Set<string>();
   for (const raw of txtRecords) {
     const record = raw.toLowerCase().replace(/^"|"$/g, '');
-    for (const { prefix, vendor } of SAAS_VERIFICATION_VENDORS) {
-      if (record.startsWith(prefix.toLowerCase())) {
-        found.add(vendor);
-        break;
-      }
-    }
+    const entry = table.find(({ prefix }) => record.startsWith(prefix.toLowerCase()));
+    if (entry) found.add(nameOf(entry));
   }
   return [...found].sort();
+}
+
+/** Counts distinct vendors across the apex TXT set. */
+export function countSaasVendors(txtRecords: readonly string[]): string[] {
+  return matchTxtPrefixes(txtRecords, SAAS_VERIFICATION_VENDORS, (entry) => entry.vendor);
 }
 
 /**
@@ -131,14 +146,7 @@ export const DISPOSABLE_VERIFICATION_TXT: readonly { prefix: string; provider: s
 
 /** Disposable-mail providers named by a verification token in the apex TXT set. */
 export function matchDisposableVerification(txtRecords: readonly string[]): string[] {
-  const found = new Set<string>();
-  for (const raw of txtRecords) {
-    const record = raw.toLowerCase().replace(/^"|"$/g, '');
-    for (const { prefix, provider } of DISPOSABLE_VERIFICATION_TXT) {
-      if (record.startsWith(prefix.toLowerCase())) found.add(provider);
-    }
-  }
-  return [...found].sort();
+  return matchTxtPrefixes(txtRecords, DISPOSABLE_VERIFICATION_TXT, (entry) => entry.provider);
 }
 
 /**

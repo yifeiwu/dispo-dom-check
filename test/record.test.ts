@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchJson, fetchText, probe } from '@/lib/fetch';
 import { TranscriptMissError, withHttpRecording, withHttpReplay } from '@/lib/record';
 import { HttpError, RateLimitedError } from '@/lib/errors';
+import { analyze } from '@/lib/analyze';
+import { normaliseInput } from '@/lib/domain';
+import { ageDays } from '@/lib/facts';
+import { facts } from './fixtures';
 
 /**
  * The recorder exists so that an expensive collection run survives a change to the collectors. These
@@ -119,5 +123,57 @@ describe('response recording', () => {
 
     expect(await fetchText('https://api.example.com/live')).toBe('live');
     expect(network.calls()).toBe(1);
+  });
+});
+
+/**
+ * The other half of replay fidelity: the clock, which the responses cannot carry.
+ *
+ * Replaying a transcript reproduces every answer exactly and then dated them from the moment of the
+ * replay, so a cache left alone for a few weeks quietly aged its own holdout. Age, term length and time
+ * to expiry all derive from `meta.analysedAt`, which made the drift look like a scoring change: on a
+ * seven-week-old cache it moved AUC by 0.004 and flipped `signup.ambiguous_routing` from KEEP to
+ * REMOVE, neither of which had anything to do with the collectors a reparse exists to test.
+ */
+describe('analysis clock', () => {
+  const asOk = (domain: string) => {
+    const input = normaliseInput(domain);
+    if (input.kind !== 'ok') throw new Error(`fixture domain was rejected as ${input.kind}`);
+    return input;
+  };
+
+  it('reads the clock when no instant is supplied', async () => {
+    stubFetch(() => new Response('{}', { status: 200 }));
+    const before = Date.now();
+
+    const result = await analyze(asOk('example.com'));
+
+    expect(Date.parse(result.facts.meta.analysedAt)).toBeGreaterThanOrEqual(before);
+  });
+
+  it('dates the analysis from the supplied instant, so a replay is not a different measurement', async () => {
+    stubFetch(() => new Response('{}', { status: 200 }));
+    const captured = '2026-08-17T02:05:29.798Z';
+
+    const result = await analyze(asOk('example.com'), { analysedAt: captured });
+
+    expect(result.facts.meta.analysedAt).toBe(captured);
+  });
+
+  /** The property the audit actually depends on: the same transcript scores the same whenever it is read. */
+  it('derives age from the supplied instant rather than from today', () => {
+    const at = (analysedAt: string) =>
+      facts({
+        meta: { ...facts().meta, analysedAt },
+        registration: {
+          via: 'rdap',
+          creation: '2026-08-01T00:00:00Z',
+          statuses: [],
+          nameservers: [],
+        },
+      });
+
+    expect(ageDays(at('2026-08-17T00:00:00Z'))).toBe(16);
+    expect(ageDays(at('2026-10-05T00:00:00Z'))).toBe(65);
   });
 });

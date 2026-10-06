@@ -1,4 +1,4 @@
-import type { DomainFacts } from '../facts';
+import { sourceUrlFor, type DomainFacts } from '../facts';
 import { describeVmcFailure } from '../data/bimi-authorities';
 
 /**
@@ -47,11 +47,20 @@ export type ObservationResult = {
   sourceUrl?: string;
 };
 
-function sourceUrlFor(facts: DomainFacts, source: string): string | undefined {
-  return facts.sources.find((entry) => entry.source === source)?.sourceUrl;
-}
-
 export const OBSERVATIONS: ObservationDefinition[] = [
+  {
+    id: 'signup.shared_mail_infrastructure',
+    label: 'Mail handled by a consumer provider\u2019s own infrastructure',
+    rationale:
+      'This is the finding behind an out-of-scope verdict, and it is the one entry here that earns nothing because it decided everything. A domain whose mail exchangers are a large free provider\u2019s own inbound servers is a mailbox shared by a great many unrelated people, so no score about one organisation applies to it and none is given. Reported because a verdict that declines to answer has to say what it saw: the hardcoded list of provider domains cannot cover the hundreds of vanity names each of these providers operates, and this is how the rest are recognised.',
+    observe(facts) {
+      if (facts.signup?.class !== 'consumer_infrastructure') return null;
+      return {
+        evidence: `Mail exchanger ${facts.signup.matchedHost} is ${facts.signup.provider} inbound infrastructure, so this name is a shared mailbox rather than one organisation\u2019s domain`,
+        sourceUrl: sourceUrlFor(facts, 'dns'),
+      };
+    },
+  },
   {
     id: 'economics.unpriced_suffix',
     label: 'Suffix absent from the reference price list',

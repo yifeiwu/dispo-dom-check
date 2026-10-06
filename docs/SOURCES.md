@@ -333,7 +333,11 @@ feed fetched per request. Verified classes:
 | Alias forwarders | Unmistakable per-provider mail exchangers. The boundary against the temp-mail table above is whether the inbox expires: an alias that lives until its owner deletes it, forwarding to a mailbox they already had, is this class and not that one, which matters because that table is consulted first and at more than three times the weight. |
 | Shared relay domains | Matched on the submitted domain, since relay users receive mail at the provider's domain and never point their own MX. |
 | Paid mail tenancy | Business suites, enterprise mail gateways and the paid-only privacy hosts, used as a weak positive. Membership turns on the bill scaling with the mailbox, which is what makes a match evidence of spend on this domain rather than of a subscription the operator already held. |
-| Consumer mail infrastructure | Matched on mail exchanger so that a large free provider's vanity domains route to `out_of_scope` generically, instead of requiring every one to be enumerated. |
+| Consumer mail infrastructure | Matched on mail exchanger so that a large free provider's vanity domains route to `out_of_scope` generically, instead of requiring every one to be enumerated. That routing is real as of `1.8.0`; for three versions before it this line described an intention. The class was set, and used to stop a provider's own vanity domain reading as a paying business tenant, but nothing else read it, so all 19 such domains in the holdout were scored as ordinary businesses and 15 came out `unclear` — a number in the middle of the range, about a mailbox shared by millions of people. |
+| Presence-required suffixes | Registries that will not let an operator hold a name without an enforced presence in their territory, used to exempt the suffix from the first-year price penalty. The criterion is enforcement rather than geography: DENIC deletes a `.de` domain whose German administrative contact fails, and Nominet, EURid, AFNIC and CIRA each verify. `.us` is excluded although it has a nexus policy, because the policy is self-certified at registration and nothing checks it — the holdout carries 33 abuse domains there and no legitimate one. `.nl`, `.be`, `.ch`, `.at`, `.se`, `.pl` and `.es` ask for nothing and are excluded. |
+| Placeholder phrases | The half of the parking-page fingerprint list that could equally be a line of copy on a working site — "coming soon", "under construction", "make an offer", "index of /". Kept apart from the dispositive phrases and consulted only where the page has no title or under 500 characters of readable text. `1.9.0` added the same two sentences in six further languages, which is the direct remedy for the localisation gap the asset-path entries were working around. |
+| Disposable service titles | Phrases by which a throwaway-inbox service names itself in its own page title, which is the only detector here aimed at a *provider* rather than at one of its customers. The other three identify a domain enrolled with such a service — its exchanger, its address pool, its ownership token — and fire on none of the 123 domains the holdout labels disposable, because a provider routes mail to its own infrastructure and publishes nothing for anybody else. Read off the title the site probe already fetched, so it costs no request. Only the title is matched, and only phrases naming the product qualify: the failure mode is a page written *about* disposable mail, and such a page discusses the topic in prose while titling itself something else. |
+| Parking page fingerprints | Phrases that can only appear on a page whose purpose is to hold a name. Extended in `1.9.0` with five titles found by reading what the pages the model did *not* call parked are called — most of the holdout's parked pages announce it in their `<title>`, and the two commonest, Hostinger's and Namecheap's, matched nothing in the list. Every candidate is tested against all 133 legitimate pages before admission, which is how a bare "default page" (19 legitimate hits) and the 5xx error strings were kept out; a server that is briefly unreachable is not a domain that is parked. |
 | Registrar defaults | Requires the RDAP registrar identity, its default nameservers and its bundled forwarding MX to agree. No component is negative alone. |
 | Redirect targets | Known parking, hosted-site and public-profile destinations are classified locally; an unrecognised external destination remains unknown rather than guessed. |
 | Website platforms | Per platform: the markers its edge emits, the address ranges it publishes for custom domains, and whether attaching one requires a paid plan. Only the address ranges support a credit, since headers and asset references are what a server chooses to send. Ranges are listed only where the platform answers from its own space — several front their edge with a general-purpose CDN, and a range identifying Cloudflare rather than the platform is worse than none. Two entries are load-bearing corrections rather than data: Ghost is marked as not implying payment because it is self-hostable, and a Squarespace parking page is never read as a platform serving a domain, because Squarespace is also a registrar. |
@@ -355,6 +359,17 @@ operator already had rather than spend on the domain in front of us. Both are le
 placed somewhere gentler, which costs nothing: the exchanger goes unrecognised and the surrounding
 signals decide. The audit is what made both visible, in the same way it corrected the vetted-suffix list,
 and both were declined on the criterion rather than on the handful of labelled domains they touched.
+
+Three sponsored gTLDs left the vetted list in `1.9.0` for the same reason `edu.pl` did, which is worth
+recording as a maintenance hazard rather than as three facts: a table of restricted namespaces decays
+in one direction only. `travel`, `jobs` and `museum` were each genuinely gated when delegated and have
+each since liberalised to self-attestation, none of them announced it, and all three sat in the list for
+every prior version being paid the strongest credit the name dimension can award. Nothing in the holdout
+registers under any of them, so no measurement would ever have caught it; only re-reading the registry
+policies did. The entry criterion was also sharpened in the process, and the sharpening is what matters
+more than the specific rows: the question is not whether a registry has an eligibility policy but
+*when* it checks. Validation on complaint, or after activation, or within a year of it, is not a gate an
+operator who needs the domain for a fortnight has to pass.
 
 Because SMTP port 25 is unavailable from the deployment target, catch-all capability cannot be probed
 directly, and this MX-class inference is the substitute.
@@ -464,10 +479,43 @@ hashing and sitemap analysis, plus scam-shop heuristics such as wallet prompts, 
 links and "established since" contradictions. The messaging-app check in particular encoded a
 geographic bias against legitimate businesses.
 
-## Deferred
+## What the deployment target rules out
 
-**Cohort detection**, which requires storage. The same registrar plus the same nameservers plus
-creation timestamps inside the same minute identifies bulk registration directly, and it is among the
-strongest available signals for account farming. `DomainFacts` retains the raw registrar, nameserver
-and creation-timestamp values so this becomes possible without a re-crawl. It remains deferred: every
-signal currently evaluated by the service is stateless.
+The service runs on Vercel, where each analysis is a function invocation that shares nothing with any
+other. No request can see what a previous one saw, there is no local disk that survives the response,
+and there is no background job to accumulate anything between requests. Every signal above is therefore
+computed from what one request can fetch about one domain inside one latency budget. That is a real
+constraint on sensitivity rather than an implementation detail, and it is worth being specific about
+what it costs, because the gap has a known shape.
+
+**Cohort detection** is the signal it rules out, and it is the largest one missing. The same registrar
+plus the same nameservers plus creation timestamps inside the same minute identifies bulk registration
+directly, and it is among the strongest available signals for account farming — the holdout is 94%
+abuse precisely because those domains come in generated batches, and the clustering that makes
+family-weighted statistics necessary in the first place is the very structure this would detect.
+`DomainFacts` retains the raw registrar, nameserver and creation-timestamp values, so adding it needs
+no re-crawl, only somewhere to put them.
+
+There is no stateless substitute, and the reason is structural rather than a matter of effort. A cohort
+is a property of a *set* of domains, and the evidence for membership lives in the siblings rather than
+in the member. The registry's own record for one domain says who registered it and when, and says
+nothing whatever about the ten thousand names registered alongside it; no amount of looking harder at
+one domain recovers the other 9,999. Approximations were considered and are worse than nothing: a
+registrar-plus-nameserver pair without the timestamp describes every customer of a popular registrar,
+and a creation minute without the peers describes every domain registered in a busy minute.
+
+What the constraint does *not* rule out is most of what the last two versions changed. Every fix in
+`1.8.0` is a correction to how one request reads evidence it was already fetching, so each costs zero
+additional latency and zero state: suppressing a penalty that a tenancy could never avoid, matching the
+paid-mail table against the exchangers a sender will actually try rather than all of them, two more rows
+in a bundled suffix table, an exemption keyed on a committed table, and splitting one fingerprint list
+into two. A stateless platform is a hard limit on what kinds of evidence are reachable; it is not a
+limit on reading the reachable evidence correctly, and that is where the remaining room is.
+
+`1.9.0` is the same shape and makes the point more sharply, because the evidence it added was sitting
+inside bytes the probe had already parsed. Counting the distinct same-domain paths a page links to needs
+no request beyond the one the site probe makes anyway — the anchors are in the response — and it turned
+out to carry the single largest separation found in this pass, with a legitimate median of 9 against an
+abuse median of 0. The probe was reading the response for a title and a character count and discarding
+the structure. Nothing about being stateless prevented that; it was simply never looked at, which is the
+more common reason a signal is missing than any platform limit.

@@ -1,3 +1,5 @@
+import { isAtOrUnder } from '../hostname';
+
 export type RedirectTargetClass = 'parking' | 'hosted_destination' | 'social_profile' | 'unknown';
 
 type RedirectPattern = {
@@ -27,15 +29,10 @@ const REDIRECT_PATTERNS: readonly RedirectPattern[] = [
   { pattern: 'myshopify.com', provider: 'Shopify', class: 'hosted_destination' },
 ];
 
-function suffixMatches(host: string, pattern: string): boolean {
-  return host === pattern || host.endsWith(`.${pattern}`);
-}
-
 export function classifyRedirectTarget(host: string): {
   class: RedirectTargetClass;
   provider?: string;
 } {
-  const normalised = host.toLowerCase().replace(/\.$/, '');
-  const match = REDIRECT_PATTERNS.find(({ pattern }) => suffixMatches(normalised, pattern));
+  const match = REDIRECT_PATTERNS.find(({ pattern }) => isAtOrUnder(host, pattern));
   return match ? { class: match.class, provider: match.provider } : { class: 'unknown' };
 }

@@ -1,5 +1,6 @@
-import { ageDays, daysUntil, type DomainFacts, type NameFacts } from '../facts';
+import { ageDays, daysUntil, sourceUrlFor, type DomainFacts, type NameFacts } from '../facts';
 import { describeVmcFailure } from '../data/bimi-authorities';
+import { presenceRequirementFor } from '../data/presence-required-suffixes';
 import type { Dimension, ScoringConfig } from './weights';
 
 /**
@@ -74,16 +75,37 @@ function registrationApplies(facts: DomainFacts): boolean {
   return !facts.meta.providerSuffix;
 }
 
-function sourceUrlFor(facts: DomainFacts, source: string): string | undefined {
-  return facts.sources.find((entry) => entry.source === source)?.sourceUrl;
-}
-
 /**
  * The registration record can arrive over either protocol, so the evidence link follows whichever one
  * answered rather than naming RDAP and being wrong for every ccTLD that has none.
  */
 function registrationSourceUrl(facts: DomainFacts): string | undefined {
   return facts.registration ? sourceUrlFor(facts, facts.registration.via) : undefined;
+}
+
+/**
+ * Whether the zone under analysis was published by the platform that issued the name.
+ *
+ * A tenant suffix hands out a name *with* its records already in place: Microsoft publishes the MX for
+ * `<tenant>.onmicrosoft.com` so that a new tenancy has a routable mail domain before it attaches one of
+ * its own, and nobody can add a web host, a `www` or anything else to that zone. Counting those records
+ * as breadth credits the tenant for Microsoft's work, and reading the absent ones as a mail-only zone
+ * charges the tenant for Microsoft's product design.
+ *
+ * The second half is the expensive one and it was firing on the whole namespace. All 9 platform
+ * tenancies in the holdout took the -10 mail-only penalty — 6 legitimate and 3 abuse, every one of them
+ * landing in `unclear` — because a tenancy zone is mail and identity by construction and can never be
+ * anything else. A penalty that fires on every member of a population measures nothing about any member
+ * of it, which is the objection that removed `footprint.dnssec`; the difference is that this one is
+ * structural rather than merely usual, so the 100% rate is guaranteed rather than observed.
+ *
+ * Narrow on purpose, and it is `kind` rather than `impliesPaidTenant` that decides. What matters is who
+ * publishes the zone, not what it costs. A free-subdomain or dynamic-DNS name is delegated to its holder
+ * and a mail-only one of those is the farm shape exactly, so both halves of the signal still apply
+ * there.
+ */
+function zoneBelongsToPlatform(facts: DomainFacts): boolean {
+  return facts.meta.providerSuffix?.kind === 'tenant';
 }
 
 /**
@@ -200,6 +222,34 @@ export const SIGNALS: readonly SignalDefinition[] = [
     },
   },
   {
+    id: 'signup.disposable_declared',
+    dimension: 'signup',
+    label: 'The site names itself a throwaway-inbox service',
+    rationale:
+      'The three signals above all identify a customer of a disposable-mail service — an exchanger belonging to one, an exchanger resolving into one\u2019s address pool, a token published for one. A provider\u2019s own domain routes mail to its own infrastructure and publishes nothing for anyone else, so it is invisible to all of them while genuinely holding the age, the records and the working website that those facts credit. What it cannot hide is the shopfront: a service selling throwaway inboxes has to be found by the people who want one, so it advertises the product in its page title. That is read off the page the site probe already fetched, so it costs no request. Nothing is inferred from a page merely discussing disposable mail, which is why only the title is matched and only phrases naming the product qualify.',
+    weight: (cfg) => fixed(cfg.signup.tempMail),
+    /*
+     * Priced from `signup.tempMail` rather than carrying its own weight, for the reason given at
+     * `signup.temp_mail_endpoint`: it is the same claim about the same capability, reached by a
+     * different observation. A domain can match this and a mail-side fingerprint at once, and the sum
+     * then rests on the dimension floor, which is the intended arithmetic rather than double counting.
+     *
+     * Filed under `signup` though the evidence came from the site probe, on the same reasoning as
+     * `signup.disposable_token`: dimensions carry their own clamps and `site` is bounded at -12, so
+     * filing this by where it was read rather than by what it establishes would discard two thirds of
+     * it. What this observes is the domain's signup capability; the page is only the transport.
+     */
+    evaluate(facts, cfg) {
+      const phrase = facts.site?.declaredDisposable;
+      if (!phrase) return null;
+      return {
+        points: cfg.signup.tempMail,
+        evidence: `The site titles itself \u201C${facts.site?.title}\u201D, naming itself a disposable-mail service`,
+        sourceUrl: facts.site?.finalUrl,
+      };
+    },
+  },
+  {
     id: 'signup.wildcard_mx',
     dimension: 'signup',
     label: 'Every subdomain receives mail',
@@ -299,7 +349,7 @@ export const SIGNALS: readonly SignalDefinition[] = [
     dimension: 'signup',
     label: 'Mail hosted on a paid business mail tenant',
     rationale:
-      'Per-seat business mail costs money for every mailbox, which is the opposite of the economics an account farm needs. The bonus is small because the major suites offer trials and cheap entry tiers that an abuser can reach.',
+      'Per-seat business mail costs money for every mailbox, which is the opposite of the economics an account farm needs. Publishing the exchanger proves nothing by itself, since pointing MX at a suite requires no account with it; what the credit rests on is that mail arriving there without a tenancy behind it is rejected, so an operator who has to receive verification messages cannot fake it. That holds only for the exchanger delivery is attempted at, so a paid name sitting behind a preferred one earns nothing. The bonus is small because the major suites offer trials and cheap entry tiers that an abuser can reach.',
     weight: (cfg) => fixed(cfg.signup.paidTenant),
     evaluate(facts, cfg) {
       const tenantSuffix = facts.meta.providerSuffix?.impliesPaidTenant;
@@ -396,13 +446,28 @@ export const SIGNALS: readonly SignalDefinition[] = [
     dimension: 'economics',
     label: 'First-year registration price of the suffix',
     rationale:
-      'Bulk abuse is a unit-cost problem. At the bottom of the price range an operator buys seven domains for the price of one mainstream registration, so a very cheap suffix lowers the cost of disposing of a domain after a single use. The figure is the suffix\u2019s list price, not what this particular name sold for: a premium or resold name can cost far more, and paying more than list is not evidence of abuse.',
+      'Bulk abuse is a unit-cost problem. At the bottom of the price range an operator buys seven domains for the price of one mainstream registration, so a very cheap suffix lowers the cost of disposing of a domain after a single use. The figure is the suffix\u2019s list price, not what this particular name sold for: a premium or resold name can cost far more, and paying more than list is not evidence of abuse. The inference also needs the price to be the whole barrier, so a registry that demands an enforced presence in its territory is charged nothing however cheaply it lists: what stood between an operator and ten thousand names there was never the money.',
     weight: (cfg) => spanning(cfg.economics.priceTiers.map((tier) => tier.points), 'by price tier'),
     evaluate(facts, cfg) {
       if (!registrationApplies(facts)) return null;
       const price = facts.pricing?.registration;
       if (price === undefined) return null;
       const suffix = facts.pricing?.suffix;
+
+      /*
+       * Reported at zero rather than withheld, on the `combo.correlated_absence` pattern. A reader owed
+       * the reason a $2.90 suffix cost nothing cannot get it from a row that is not there, and the row
+       * is how the exemption gets argued with rather than discovered.
+       */
+      const presence = presenceRequirementFor(facts.meta.suffix);
+      if (presence) {
+        return {
+          points: 0,
+          evidence: `A first-year registration under .${suffix} lists at about $${price.toFixed(2)}, but ${presence.registry} requires ${presence.requirement}, so the price is not what stands between an operator and holding one`,
+          sourceUrl: sourceUrlFor(facts, 'pricing'),
+        };
+      }
+
       const tier = cfg.economics.priceTiers.find((entry) => price < entry.under);
       if (!tier || tier.points === 0) {
         return {
@@ -733,6 +798,9 @@ export const SIGNALS: readonly SignalDefinition[] = [
       ),
     evaluate(facts, cfg) {
       if (!facts.dns) return null;
+      // Nothing here belongs to the holder of a platform-issued tenancy, in either direction. See
+      // `zoneBelongsToPlatform`.
+      if (zoneBelongsToPlatform(facts)) return null;
       const classes = RECORD_CLASSES.filter((entry) => entry.present(facts)).map(
         (entry) => entry.label,
       );
@@ -763,7 +831,7 @@ export const SIGNALS: readonly SignalDefinition[] = [
 
       return {
         points: classes.length * cfg.configuration.recordBreadthPerClass,
-        evidence: `Zone carries ${classes.length} record classes: ${classes.join(', ')}`,
+        evidence: `Zone carries ${classes.length} record ${classes.length === 1 ? 'class' : 'classes'}: ${classes.join(', ')}`,
         sourceUrl: sourceUrlFor(facts, 'dns'),
       };
     },
@@ -854,13 +922,18 @@ export const SIGNALS: readonly SignalDefinition[] = [
     dimension: 'site',
     label: 'Serves a real website',
     rationale:
-      'A working site with a title and a meaningful amount of readable content is something someone built. Answering the narrow question of whether this domain does anything other than receive mail is the whole purpose of the site probe.',
+      'A working site with a title, a meaningful amount of readable content and somewhere else to go on the same domain is something someone built. Answering the narrow question of whether this domain does anything other than receive mail is the whole purpose of the site probe. The navigation requirement is what separates a website from a page: a title and five hundred characters describe a farm\u2019s landing page exactly as well as a small business\u2019s homepage, and 200 of the 467 abuse pages that used to earn this had no internal link at all. Nothing is paid for having links, which would be a credit for markup the domain writes about itself; the credit is simply withheld from a page that offers nowhere to go.',
     weight: (cfg) => fixed(cfg.site.substantiveContent),
     evaluate(facts, cfg) {
       if (!facts.site?.substantive) return null;
+      const paths = facts.site.internalPaths ?? 0;
+      const reach =
+        paths > 0
+          ? `${paths} further ${paths === 1 ? 'page' : 'pages'} on this domain`
+          : 'enough content to settle it without readable navigation';
       return {
         points: cfg.site.substantiveContent,
-        evidence: `Returns ${facts.site.status} with roughly ${facts.site.contentLength} characters of readable content`,
+        evidence: `Returns ${facts.site.status} with roughly ${facts.site.contentLength} characters of readable content, linking to ${reach}`,
         sourceUrl: facts.site.finalUrl,
       };
     },

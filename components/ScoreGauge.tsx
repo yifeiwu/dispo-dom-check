@@ -42,9 +42,13 @@ export function ScoreGauge({
   const colours = VERDICT_COLOURS[verdict];
   const score = arc(SCORE_RADIUS, legitimacy / 100);
 
-  // Below the threshold the verdict is withheld, so the arc is dashed to show the score is not standing
-  // on much rather than letting it render as solidly as a fully evidenced one.
-  const withheld = verdict === 'insufficient_evidence';
+  /*
+   * Two verdicts stand behind no number, and the arc is faded for both so the score does not render as
+   * solidly as a fully evidenced one. The reasons differ and the note below says which: under the
+   * confidence threshold too little answered to call it, and out of scope the question does not apply
+   * to the name at all, however much answered.
+   */
+  const withheld = verdict === 'insufficient_evidence' || verdict === 'out_of_scope';
   const confidenceLabel = confidence >= 80 ? 'High' : confidence >= 40 ? 'Moderate' : 'Low';
 
   return (
@@ -99,7 +103,9 @@ export function ScoreGauge({
 
         {withheld ? (
           <p className="mt-2 max-w-xs text-sm leading-relaxed text-ink-faint">
-            Too little answered to call this either way, so the verdict is withheld rather than guessed.
+            {verdict === 'out_of_scope'
+              ? 'This name is a shared mailbox, so a domain-level score says nothing about an account on it.'
+              : 'Too little answered to call this either way, so the verdict is withheld rather than guessed.'}
           </p>
         ) : null}
       </div>
