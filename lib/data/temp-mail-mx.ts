@@ -20,7 +20,7 @@ import type { MxFingerprint } from './mx-match';
  * and has moved for that reason, having been listed as a relay domain the whole time.
  */
 export const TEMP_MAIL_MX: readonly MxFingerprint[] = [
-  { provider: 'Guerrilla Mail', patterns: ['guerrillamail.com', 'guerrillamail.net', 'guerrillamail.org', 'grr.la', 'sharklasers.com', 'spam4.me'] },
+  { provider: 'Guerrilla Mail', patterns: ['guerrillamail.com', 'guerrillamail.net', 'guerrillamail.org', 'guerrillamail.biz', 'guerrillamail.de', 'guerrillamail.info', 'guerrillamailblock.com', 'grr.la', 'sharklasers.com', 'pokemail.net', 'spam4.me'] },
   { provider: 'YOPmail', patterns: ['yopmail.com', 'yopmail.net', 'yopmail.fr'] },
   { provider: 'Mailinator', patterns: ['mailinator.com', 'mailinator.net'] },
   { provider: 'Temp-Mail', patterns: ['temp-mail.org', 'temp-mail.io', 'tempmail.dev'] },
@@ -120,8 +120,17 @@ export const TEMP_MAIL_SPF_INCLUDES: readonly { include: string; provider: strin
  *
  * Empty because no provider currently documents a required nameserver in its public custom-domain
  * setup: they ask for MX, an A record, and a TXT token, and the customer keeps their existing DNS.
- * The matcher is wired so an entry is one line when one appears; until then the lookup is skipped,
- * which is the same early-out the endpoint table uses when it has nothing to compare.
+ * A pass over the public setup pages confirmed that rather than filling it. Mailsac publishes
+ * `in.mailsac.com` and `alt.mailsac.com`, which the `mailsac.com` pattern already matches, plus the
+ * `mailsac_` token and `include:relays.mailsac.com` already in the tables above. MailSlurp's SMTP
+ * domain publishes `mx.mailslurp.com`, already matched, and its HTTP domain publishes
+ * `inbound-smtp.us-west-2.amazonaws.com`, which is Amazon SES and would condemn every tenant in that
+ * region. TempMail Central's custom-domain post names neither the mail host nor a stable token prefix.
+ * Cloudflare Email Routing's MX and `include:_spf.mx.cloudflare.net` are how ordinary domains receive
+ * mail, and they are already `free_routing`. Nothing here was taken from the labelled holdout: the 123
+ * disposable rows are mostly that Cloudflare routing, and fitting a row to them is the circularity this
+ * table exists to avoid. The matcher is wired so an entry is one line when one appears; until then the
+ * lookup is skipped, which is the same early-out the endpoint table uses when it has nothing to compare.
  */
 export const TEMP_MAIL_NS: readonly { pattern: string; provider: string }[] = [];
 

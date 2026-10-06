@@ -39,6 +39,20 @@ export function matchMx(
 }
 
 /**
+ * Google's domain-verification MX, which is not a mailbox.
+ *
+ * Workspace setup publishes `_dc-mx.<hex>.<the-domain>` at a priority a sender tries before the real
+ * exchangers — often 0, in front of `aspmx.l.google.com` at 1. Treating it as the delivery path costs
+ * a genuine tenant the paid-mail credit and, because the name is inside the customer's own zone, skips
+ * the in-zone inspection of the exchanger that actually receives the mail. The hex is per domain, so
+ * the label is the stable part.
+ */
+export function isDomainVerificationMx(host: string): boolean {
+  const normalised = normaliseHostname(host);
+  return Boolean(normalised?.startsWith('_dc-mx.'));
+}
+
+/**
  * The exchangers a sender will actually try, which is the lowest `priority` value and every tie at it.
  *
  * Needed because matching the whole set is right for a penalty and wrong for a credit, and the two
@@ -52,11 +66,19 @@ export function matchMx(
  * A backup exchanger therefore bought the credit outright while the real mailbox sat in front of it,
  * and 4 holdout domains were in exactly that shape — three of them abuse, one of them an in-zone
  * catch-all with `smtp.google.com` behind it. Mail never reaches the paid tenant on any of them.
+ *
+ * A domain-verification record is excluded before the priority is read. It is published specifically
+ * so that it sorts first, and it accepts no mail, so "lowest priority" and "where delivery is
+ * attempted" are not the same host while it is in the set. One holdout domain, `pathwaysteam.com`,
+ * is in that shape, and it is abuse: the credit it gains is the cost of not denying the same credit
+ * to a real Workspace customer. Penalty tables do not use this function, so a disposable exchanger
+ * listed beside the verification record is still seen.
  */
 export function preferredMx(
   mx: readonly { priority: number; host: string }[],
 ): string[] {
-  if (mx.length === 0) return [];
-  const best = Math.min(...mx.map((entry) => entry.priority));
-  return mx.filter((entry) => entry.priority === best).map((entry) => entry.host);
+  const deliverable = mx.filter((entry) => !isDomainVerificationMx(entry.host));
+  if (deliverable.length === 0) return [];
+  const best = Math.min(...deliverable.map((entry) => entry.priority));
+  return deliverable.filter((entry) => entry.priority === best).map((entry) => entry.host);
 }

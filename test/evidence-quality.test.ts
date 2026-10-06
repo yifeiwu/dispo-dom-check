@@ -106,6 +106,25 @@ describe('the exchangers a sender will actually try', () => {
   it('is empty rather than undefined for a zone with no mail', () => {
     expect(preferredMx([])).toEqual([]);
   });
+
+  /**
+   * Google publishes `_dc-mx.<hex>` at a priority a sender tries before the real exchangers, and the
+   * name is inside the customer's zone. Reading it as the delivery path denies the paid-tenancy credit
+   * and skips the inspection of the host that actually receives the mail.
+   */
+  it('skips a domain-verification record sitting in front of the real exchanger', () => {
+    expect(
+      preferredMx([
+        { priority: 0, host: '_dc-mx.87ecdb0af7a0.pathwaysteam.com' },
+        { priority: 1, host: 'aspmx.l.google.com' },
+        { priority: 5, host: 'alt1.aspmx.l.google.com' },
+      ]),
+    ).toEqual(['aspmx.l.google.com']);
+  });
+
+  it('is empty when the zone published nothing but a verification record', () => {
+    expect(preferredMx([{ priority: 0, host: '_dc-mx.d59704cb8ffc.simpli.id.' }])).toEqual([]);
+  });
 });
 
 describe('suffixes behind an accreditation gate', () => {
@@ -424,6 +443,30 @@ describe('a page with nowhere else to go', () => {
 
     expect(site.internalPaths).toBe(0);
     expect(site.substantive).toBe(true);
+  });
+
+  /**
+   * A replay of the stored pages found these shapes only where they would open the content-credit
+   * gate on abuse: unquoted anchors to `/login`, and form actions posting to `/locale`. No legitimate
+   * page lost a same-domain path to either. Counting them would be a credit for markup a farm can
+   * mint, which is the thing this gate exists to withhold.
+   */
+  it('does not treat an unquoted href or a form action as somewhere to go', async () => {
+    stubNetwork(
+      () =>
+        new Response(
+          `<html><head><title>Landing</title></head><body>
+             <a href=/login>Login</a>
+             <form action="/locale"><button>Language</button></form>
+             ${'word '.repeat(400)}</body></html>`,
+          { status: 200 },
+        ),
+    );
+
+    const site = await collectSite('example.com', undefined, 2_000);
+
+    expect(site.internalPaths).toBe(0);
+    expect(site.substantive).toBe(false);
   });
 
   it('counts destinations rather than anchors, so a repeated nav bar is one place', async () => {

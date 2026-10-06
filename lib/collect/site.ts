@@ -276,6 +276,14 @@ function extractTitle(html: string): string | undefined {
  * only where its host is this domain or a subdomain of it, so linking out to a marketplace earns
  * nothing, and a malformed URL is ignored rather than throwing — this runs on whatever bytes a stranger
  * chose to return.
+ *
+ * The quoted-anchor regex is the whole parser on purpose. A replay of the stored holdout pages
+ * looked for the shapes it drops — an unquoted `href`, a `<base>` tag, a form action — and none of
+ * them was a legitimate page's same-domain navigation. The unquoted anchors that would have opened
+ * the content-credit gate were five abuse pages linking to `/login`, and the form actions were three
+ * abuse pages posting to `/locale`. The one legitimate page inside the gate with no counted path,
+ * `edjeavons.co.uk`, links only off the domain. Widening the parser would pay the credit to those
+ * farms and to nobody it is currently withholding it from.
  */
 function countInternalPaths(html: string, domain: string): number {
   const paths = new Set<string>();

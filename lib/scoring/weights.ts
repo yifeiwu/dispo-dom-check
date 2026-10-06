@@ -56,7 +56,7 @@ export type ScoringConfig = Omit<DeepWiden<typeof DEFAULT_CONFIG>, 'verdictBands
 };
 
 export const DEFAULT_CONFIG = {
-  modelVersion: '1.10.0',
+  modelVersion: '1.11.0',
 
   /** Additive evidence starts from a neutral midpoint rather than from zero or from full trust. */
   neutralBase: 50,
@@ -156,6 +156,10 @@ export const DEFAULT_CONFIG = {
      * admitting a single further legitimate one. The move is small and the reason it is small is that this
      * signal was already close to right; what the sweep rules out is the much larger change that ranking
      * alone would have suggested, which was to halve it.
+     *
+     * Asked again after Zoho left this class for `ambiguousRouting`. Four of five folds picked -24 and
+     * one kept -21. Out of sample the recall change was zero, so -24 is a fold artefact rather than a
+     * better weight, and -21 stays.
      */
     freeRouting: -21,
     /**
@@ -213,6 +217,11 @@ export const DEFAULT_CONFIG = {
      * conjunction, on the pattern `freeRouting` established. The measurement said otherwise: that
      * conjunction was swept over the same folds, stayed at zero in all five, and was removed in the
      * same release it arrived in. See `lib/scoring/combinations.ts`.
+     *
+     * Re-asked on the current collection, with zero still among the candidates. All five folds picked
+     * -12 again, and removing it still costs seven abuse domains a legitimate band at no gain the other
+     * way. The ranking disagreement is unchanged — the lift interval still spans 1.00 — and the bands
+     * still decide.
      *
      * There is deliberately no weight for the two disposable-equivalent signals beside it. An MX
      * resolving to a published throwaway-inbox endpoint and an ownership token for one of those

@@ -1,6 +1,6 @@
 # Scoring model
 
-Model version: `1.10.0`
+Model version: `1.11.0`
 
 This document is the reasoning, not the numbers. The implementation lives in
 [`lib/scoring/weights.ts`](../lib/scoring/weights.ts), which is the single place any weight,
@@ -130,9 +130,12 @@ restricted this way. Every penalty table still reads the whole set, which is the
 temp-mail exchanger listed anywhere is a mailbox that can be reached, while a paid tenancy mail never
 arrives at evidences no spend on anything.
 
-The known residual exposure is Google's `_dc-mx.<hex>` domain-verification record, which sits at
-priority 0 and would cost a genuine Workspace customer the credit. One holdout domain has it, and it
-is abuse.
+Google's `_dc-mx.<hex>` domain-verification record used to be that residual. It sits at priority 0,
+ahead of the Workspace exchangers, and it names the customer's own zone, so it both denied the credit
+and skipped the in-zone inspection of the host that actually receives mail. It is now excluded from the
+delivery path and still visible to every penalty table. One holdout domain is in that shape,
+`pathwaysteam.com`, and it is abuse: the credit it gains is the cost of not denying the same credit to
+a real Workspace customer.
 
 Three rows added in `1.5.0` exist because the throwaway-inbox fingerprint was measured and found to match
 **none of the 123 holdout rows labelled `DISPOSABLE`**. That gap is structural rather than a short table.
@@ -517,6 +520,13 @@ and so is absent from the HTML: four of the five legitimate link-free pages in t
 shape, at 18,000 to 262,000 characters. The bound sits an order of magnitude above the population it
 must exclude rather than between two neighbouring clusters — the Hostinger and Spaceship placeholder
 pages run to about 925 and 2,700 characters.
+
+The path counter reads quoted `href` attributes on anchors and nothing else. A replay of the stored
+pages checked the shapes that regex drops — an unquoted `href`, a `<base>` tag, a form action — and
+none of them was a legitimate page offering somewhere else to go. The misses that would have opened
+the gate were five abuse pages linking to `/login` and three posting to `/locale`. The one legitimate
+page inside the gate with no counted path, `edjeavons.co.uk`, links only off the domain. The parser
+stays narrow because widening it would pay the credit to those farms.
 
 #### The page gets a say in whether it is a placeholder
 
@@ -1162,6 +1172,35 @@ decide. The audit prints such cases as `KEEP bands disagree` rather than hiding 
 number was consulted first, and three signals currently carry that tier.
 
 ## Changelog
+
+### 1.11.0
+
+No weight moved. AUC on the stored collection stays 0.961, legitimate domains in an actionable band
+stay at 7, and abuse domains in a legitimate band stay at 169. The two weights this release was
+opened to reconsider were both re-swept and left where they were.
+
+- **A Google domain-verification MX is not the mailbox.** `_dc-mx.<hex>` is published at a priority
+  a sender tries before the real exchangers, and the name is inside the customer's zone, so it both
+  denied the paid-tenancy credit and skipped the in-zone inspection of the host that actually
+  receives the mail. It is excluded from the delivery path. Every penalty table still reads the
+  whole MX set. One holdout domain is in that shape, `pathwaysteam.com`, and it is abuse: the credit
+  it gains is the cost of not denying the same credit to a real Workspace customer. The stored facts
+  were not reparsed, so that credit is not in the figures above.
+- **The internal-link counter stays a quoted anchor.** A replay of the stored pages looked for the
+  shapes it drops. The ones that would have opened the content-credit gate were five abuse pages
+  linking to `/login` and three posting to `/locale`. No legitimate page lost a same-domain path.
+- **Guerrilla Mail's own domain list, completed from its homepage.** `guerrillamail.biz`,
+  `guerrillamail.de`, `guerrillamail.info`, `guerrillamailblock.com` and `pokemail.net` join the
+  patterns already there. None of them occurs in the holdout, which is why the figures do not move,
+  and none was added because a holdout row used it. `benchmark-disposable/` holds the provider
+  domains whose setup pages were read, outside `benchmark/abuse.csv`. Mailsac, MailSlurp's SMTP
+  domain and TempMail.lol were already fingerprinted from those pages. MailSlurp's HTTP domain
+  points at Amazon SES, TempMail Central publishes no host and no stable token, and Cloudflare
+  Email Routing is already `free_routing`.
+- **`signup.freeRouting` stays at -21.** Four folds picked -24 and one kept -21, and out of sample
+  the recall change was zero.
+- **`signup.wildcardMx` stays at -12.** All five folds picked it, zero included among the
+  candidates, and removing it still costs seven abuse domains a legitimate band.
 
 ### 1.10.0
 

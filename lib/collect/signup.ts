@@ -1,4 +1,4 @@
-import { matchMx, preferredMx } from '../data/mx-match';
+import { isDomainVerificationMx, matchMx, preferredMx } from '../data/mx-match';
 import {
   TEMP_MAIL_MX,
   TEMP_MAIL_MX_ENDPOINTS,
@@ -304,7 +304,13 @@ async function identifyInZoneMx(
   spfRecord: string | undefined,
   timeoutMs: number,
 ): Promise<SignupFacts | undefined> {
-  const host = mxHosts[0];
+  // Priority order, with the verification record removed. `mxHosts[0]` is the lowest priority and
+  // would otherwise be `_dc-mx.<hex>`, which is inside the zone and is not where mail is delivered.
+  // An empty remainder means the zone published nothing but that record, so there is no exchanger
+  // to inspect and the neutral in-zone class stands.
+  const host = mxHosts.find((candidate) => !isDomainVerificationMx(candidate));
+  if (!host) return undefined;
+
   try {
     const { addresses, cnameTargets } = await resolveAddress(host, Math.min(timeoutMs, 1500));
     // Every target here is what the preferred exchanger resolves to, so all of them are the delivery

@@ -145,6 +145,107 @@ describe('zero-query fingerprints already in hand', () => {
   });
 });
 
+describe('a domain-verification MX in front of the real exchanger', () => {
+  it('credits the Workspace tenant behind a priority-0 _dc-mx record', async () => {
+    zone({});
+
+    const signup = await collectSignup(
+      'example.com',
+      {
+        ...EMPTY_DNS,
+        mx: [
+          { priority: 0, host: '_dc-mx.87ecdb0af7a0.example.com' },
+          { priority: 1, host: 'aspmx.l.google.com' },
+          { priority: 5, host: 'alt1.aspmx.l.google.com' },
+        ],
+      },
+      undefined,
+      2_000,
+    );
+
+    expect(signup.class).toBe('paid_tenant');
+    expect(signup.provider).toBe('Google Workspace');
+    expect(signup.matchedHost).toBe('aspmx.l.google.com');
+  });
+
+  it('still classifies a disposable exchanger listed beside the verification record', async () => {
+    zone({});
+
+    const signup = await collectSignup(
+      'example.com',
+      {
+        ...EMPTY_DNS,
+        mx: [
+          { priority: 0, host: '_dc-mx.87ecdb0af7a0.example.com' },
+          { priority: 10, host: 'mail.guerrillamail.com' },
+        ],
+      },
+      undefined,
+      2_000,
+    );
+
+    expect(signup.class).toBe('temp_mail');
+    expect(signup.provider).toBe('Guerrilla Mail');
+  });
+
+  it('inspects the in-zone exchanger behind the verification record, not the record itself', async () => {
+    zone({
+      'mx.example.com': [
+        { name: 'mx.example.com.', type: 5, TTL: 300, data: 'in.mailsac.com.' },
+        { name: 'in.mailsac.com.', type: 1, TTL: 300, data: '203.0.113.9' },
+      ],
+    });
+
+    const signup = await collectSignup(
+      'example.com',
+      {
+        ...EMPTY_DNS,
+        mx: [
+          { priority: 0, host: '_dc-mx.98d46ad589ea.example.com' },
+          { priority: 10, host: 'mx.example.com' },
+        ],
+      },
+      undefined,
+      2_000,
+    );
+
+    expect(signup.class).toBe('temp_mail');
+    expect(signup.provider).toBe('Mailsac');
+    expect(signup.matchedVia).toBe('cname');
+    expect(signup.matchedHost).toBe('in.mailsac.com');
+  });
+});
+
+describe('mail exchangers published in a provider setup page', () => {
+  it('classifies the domains Guerrilla Mail lists on its own homepage', async () => {
+    zone({});
+
+    const signup = await collectSignup(
+      'example.com',
+      { ...EMPTY_DNS, mx: [{ priority: 10, host: 'mail.pokemail.net' }] },
+      undefined,
+      2_000,
+    );
+
+    expect(signup.class).toBe('temp_mail');
+    expect(signup.provider).toBe('Guerrilla Mail');
+  });
+
+  it('classifies the backup exchanger on Mailsac DNS verification page', async () => {
+    zone({});
+
+    const signup = await collectSignup(
+      'example.com',
+      { ...EMPTY_DNS, mx: [{ priority: 5, host: 'alt.mailsac.com' }] },
+      undefined,
+      2_000,
+    );
+
+    expect(signup.class).toBe('temp_mail');
+    expect(signup.provider).toBe('Mailsac');
+  });
+});
+
 describe('ambiguous free-or-paid mail exchangers', () => {
   it('classifies Zoho as ambiguous_routing rather than free_routing', async () => {
     zone({});
