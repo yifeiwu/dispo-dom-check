@@ -246,6 +246,92 @@ describe('mail exchangers published in a provider setup page', () => {
   });
 });
 
+describe('mail exchangers taken from a provider setup page', () => {
+  it('credits Proofpoint Essentials on the host the vendor publishes', async () => {
+    zone({});
+
+    const signup = await collectSignup(
+      'example.com',
+      { ...EMPTY_DNS, mx: [{ priority: 10, host: 'mx1-us1.ppe-hosted.com' }] },
+      undefined,
+      2_000,
+    );
+
+    expect(signup.class).toBe('paid_tenant');
+    expect(signup.provider).toBe('Proofpoint');
+  });
+
+  it('credits Alibaba Mail and does not credit the rest of Alibaba Cloud', async () => {
+    zone({});
+
+    const paid = await collectSignup(
+      'example.com',
+      { ...EMPTY_DNS, mx: [{ priority: 5, host: 'mx1.qiye.aliyun.com' }] },
+      undefined,
+      2_000,
+    );
+    const other = await collectSignup(
+      'example.com',
+      { ...EMPTY_DNS, mx: [{ priority: 10, host: 'mx1.aliyun.com' }] },
+      undefined,
+      2_000,
+    );
+
+    expect(paid.class).toBe('paid_tenant');
+    expect(paid.provider).toBe('Alibaba Mail');
+    expect(other.class).not.toBe('paid_tenant');
+  });
+
+  it('treats GoDaddy mail as ambiguous, because forwarding and Professional Email share exchangers', async () => {
+    zone({});
+
+    const signup = await collectSignup(
+      'example.com',
+      { ...EMPTY_DNS, mx: [{ priority: 0, host: 'smtp.secureserver.net' }] },
+      undefined,
+      2_000,
+    );
+
+    expect(signup.class).toBe('ambiguous_routing');
+    expect(signup.provider).toBe('GoDaddy mail');
+  });
+
+  it('does not pay the tenancy credit for Hostinger Email', async () => {
+    zone({});
+
+    const signup = await collectSignup(
+      'example.com',
+      { ...EMPTY_DNS, mx: [{ priority: 5, host: 'mx1.hostinger.com' }] },
+      undefined,
+      2_000,
+    );
+
+    expect(signup.class).not.toBe('paid_tenant');
+  });
+
+  it('classifies a 1secmail domain and a generator.email exchanger as throwaway inboxes', async () => {
+    zone({});
+
+    const secmail = await collectSignup(
+      'example.com',
+      { ...EMPTY_DNS, mx: [{ priority: 10, host: 'mail.esiix.com' }] },
+      undefined,
+      2_000,
+    );
+    const generator = await collectSignup(
+      'example.com',
+      { ...EMPTY_DNS, mx: [{ priority: 10, host: 'generator.email' }] },
+      undefined,
+      2_000,
+    );
+
+    expect(secmail.class).toBe('temp_mail');
+    expect(secmail.provider).toBe('1secmail');
+    expect(generator.class).toBe('temp_mail');
+    expect(generator.provider).toBe('Generator.email');
+  });
+});
+
 describe('ambiguous free-or-paid mail exchangers', () => {
   it('classifies Zoho as ambiguous_routing rather than free_routing', async () => {
     zone({});

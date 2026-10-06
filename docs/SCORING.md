@@ -1,6 +1,6 @@
 # Scoring model
 
-Model version: `1.11.0`
+Model version: `1.12.0`
 
 This document is the reasoning, not the numbers. The implementation lives in
 [`lib/scoring/weights.ts`](../lib/scoring/weights.ts), which is the single place any weight,
@@ -1172,6 +1172,20 @@ decide. The audit prints such cases as `KEEP bands disagree` rather than hiding 
 number was consulted first, and three signals currently carry that tier.
 
 ## Changelog
+
+### 1.12.0
+
+The paid-tenant and throwaway-inbox exchanger lists grew from vendor setup pages. Hostinger Email
+was the one per-mailbox product left out: on the stored holdout it appears on 70 abuse domains and
+no legitimate one, and the credit would move 17 of those verdicts, several into a legitimate band.
+
+- **Paid tenants.** Proofpoint Essentials (`ppe-hosted.com`), Alibaba Mail (`qiye.aliyun.com` and
+  `mxhichina.com`, not the rest of `aliyun.com`), Symantec Email Security.cloud (`messagelabs.com`),
+  mailbox.org and Tuta (`mail.tutanota.de`).
+- **GoDaddy mail is ambiguous.** Professional Email and Email Forwarding both publish
+  `smtp.secureserver.net`, so the hostname is neither a paid credit nor a free-routing penalty.
+- **Throwaway inboxes.** 1secmail's published domains, Mailinator's `testinator.com`, and
+  `generator.email`.
 
 ### 1.11.0
 

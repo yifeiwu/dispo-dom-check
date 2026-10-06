@@ -22,7 +22,11 @@ import type { MxFingerprint } from './mx-match';
 export const TEMP_MAIL_MX: readonly MxFingerprint[] = [
   { provider: 'Guerrilla Mail', patterns: ['guerrillamail.com', 'guerrillamail.net', 'guerrillamail.org', 'guerrillamail.biz', 'guerrillamail.de', 'guerrillamail.info', 'guerrillamailblock.com', 'grr.la', 'sharklasers.com', 'pokemail.net', 'spam4.me'] },
   { provider: 'YOPmail', patterns: ['yopmail.com', 'yopmail.net', 'yopmail.fr'] },
-  { provider: 'Mailinator', patterns: ['mailinator.com', 'mailinator.net'] },
+  {
+    provider: 'Mailinator',
+    patterns: ['mailinator.com', 'mailinator.net', 'testinator.com'],
+    note: 'testinator.com is the private-domain host Mailinator documents for its own inboxes',
+  },
   { provider: 'Temp-Mail', patterns: ['temp-mail.org', 'temp-mail.io', 'tempmail.dev'] },
   { provider: 'Mail.tm / Mail.gw', patterns: ['mail.tm', 'mail.gw'] },
   { provider: 'DropMail', patterns: ['dropmail.me', 'dropmail.cc'] },
@@ -58,6 +62,17 @@ export const TEMP_MAIL_MX: readonly MxFingerprint[] = [
   { provider: 'Chacuo', patterns: ['chacuo.net'] },
   { provider: 'Luxusmail', patterns: ['luxusmail.org'] },
   { provider: 'Internxt Temporary Email', patterns: ['internxt.com'] },
+  /*
+   * 1secmail publishes the domains it issues addresses on from its own domain-list API. The set below
+   * is the one repeated across that API's public clients; the service rotates further names, and a
+   * name that rotates out simply stops matching. These are the service's own domains, not customer
+   * names taken from the holdout.
+   */
+  {
+    provider: '1secmail',
+    patterns: ['1secmail.com', '1secmail.org', '1secmail.net', 'wwjmp.com', 'esiix.com', 'xojxe.com', 'yoggm.com'],
+  },
+  { provider: 'Generator.email', patterns: ['generator.email'] },
 ];
 
 /**

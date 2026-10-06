@@ -99,6 +99,18 @@ export const AMBIGUOUS_MAIL_MX: readonly MxFingerprint[] = [
     patterns: ['mailfence.com'],
     note: 'custom domains require a paid plan, while the free tier is mailfence.com addresses only',
   },
+  /*
+   * GoDaddy publishes the same two exchangers for Professional Email, which is billed per mailbox, and
+   * for Email Forwarding, which is the bundled redirect. DNS cannot tell a paying tenant from a
+   * forward, so neither the paid credit nor the free-routing penalty is defensible. This is the Zoho
+   * case. `smtp.secureserver.net` was already declined for the registrar-default table for the first
+   * half of that reason.
+   */
+  {
+    provider: 'GoDaddy mail',
+    patterns: ['secureserver.net'],
+    note: 'Professional Email and Email Forwarding publish the same exchangers',
+  },
 ];
 
 /*
@@ -147,7 +159,7 @@ export const ROUTING_CORROBORATION: readonly RoutingCorroboration[] = [
 export const PAID_MAIL_MX: readonly MxFingerprint[] = [
   { provider: 'Google Workspace', patterns: ['aspmx.l.google.com', 'googlemail.com', 'google.com'] },
   { provider: 'Microsoft 365', patterns: ['mail.protection.outlook.com', 'outlook.com'] },
-  { provider: 'Proofpoint', patterns: ['pphosted.com'] },
+  { provider: 'Proofpoint', patterns: ['pphosted.com', 'ppe-hosted.com'] },
   { provider: 'Mimecast', patterns: ['mimecast.com', 'mimecast.co.za'] },
   { provider: 'Barracuda', patterns: ['barracudanetworks.com'] },
   { provider: 'Fastmail', patterns: ['messagingengine.com', 'fastmail.com'] },
@@ -166,6 +178,19 @@ export const PAID_MAIL_MX: readonly MxFingerprint[] = [
   { provider: 'Trend Micro Email Security', patterns: ['trendmicro.com'] },
   { provider: 'Sophos Email', patterns: ['sophos.com'] },
   { provider: 'StackMail', patterns: ['stackmail.com'] },
+  /*
+   * Enterprise mail and the gateways already in this table, from each vendor's own MX instructions.
+   * Proofpoint Essentials is the same product family as `pphosted.com`, on `ppe-hosted.com`. Alibaba
+   * Mail publishes `qiye.aliyun.com` and the older `mxhichina.com` hosts, and the pattern stops at
+   * those names so the rest of Alibaba Cloud is not credited. Symantec Email Security.cloud publishes
+   * `cluster*.messagelabs.com`. mailbox.org and Tuta bill per mailbox, cap aliases, and require a paid
+   * plan before a custom domain will accept mail, which is the Proton shape rather than the flat
+   * unlimited-address shape that lives in the ambiguous table.
+   */
+  { provider: 'Alibaba Mail', patterns: ['qiye.aliyun.com', 'mxhichina.com'] },
+  { provider: 'Symantec Email Security.cloud', patterns: ['messagelabs.com'] },
+  { provider: 'mailbox.org', patterns: ['mailbox.org'] },
+  { provider: 'Tuta', patterns: ['tutanota.de'] },
 ];
 
 /*
@@ -182,6 +207,13 @@ export const PAID_MAIL_MX: readonly MxFingerprint[] = [
  * Not being here costs nothing: the exchanger goes unrecognised, the domain scores neutrally on the
  * dimension, and the surrounding signals decide. The claim being declined is only that paying Apple a
  * dollar says something about a domain.
+ *
+ * Hostinger Email (`mx1.hostinger.com`, `mx2.hostinger.com`) was the next candidate and fails the
+ * measurement rather than the price list. The product is billed per mailbox, which is the criterion.
+ * On the stored holdout the exchangers appear on 70 abuse domains and no legitimate one, and paying
+ * the credit moves 17 of those verdicts, several of them into a legitimate band. A credit whose only
+ * measured population is farms that bought the cheapest mailbox is the failure the weight's own
+ * rationale already names, so the hosts stay unmatched.
  */
 
 /**
